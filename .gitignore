@@ -1,0 +1,12 @@
+node_modules
+.next
+out
+dist
+*.log
+.env*
+tsconfig.tsbuildinfo
+data/admin-users.json
+data/*.sqlite
+data/*.sqlite-*
+public/uploads/*
+!public/uploads/.gitkeep

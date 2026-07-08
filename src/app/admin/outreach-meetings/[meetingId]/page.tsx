@@ -1,0 +1,313 @@
+import Image from "next/image";
+import Link from "next/link";
+import { headers } from "next/headers";
+import QRCode from "qrcode";
+import { Download, ExternalLink } from "lucide-react";
+import { DataTableShell } from "@/components/ui/data-table-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { findOutreachMeeting } from "@/lib/outreach-meetings-store";
+import {
+  checkinMethodLabels,
+  checkinStatusLabels,
+  mealPreferenceLabels,
+  organizationTypeLabels,
+  registrationSourceLabels,
+  registrationStatusLabels,
+} from "@/lib/registration-options";
+import { listRegistrationsByMeeting } from "@/lib/registrations-store";
+import type { OrganizationType } from "@/lib/types";
+import { dateFormatter, numberFormatter } from "@/lib/utils";
+
+function getOrganizationLabel(
+  organizationType: OrganizationType,
+  otherOrganizationType?: string,
+) {
+  if (organizationType === "other") {
+    return otherOrganizationType || "其他";
+  }
+
+  return organizationTypeLabels[organizationType];
+}
+
+async function createQrCode(url: string) {
+  return QRCode.toDataURL(url, {
+    margin: 1,
+    width: 220,
+    color: {
+      dark: "#0F172A",
+      light: "#FFFFFF",
+    },
+  });
+}
+
+export default async function OutreachMeetingDetailPage({
+  params,
+}: {
+  params: Promise<{ meetingId: string }>;
+}) {
+  const { meetingId } = await params;
+  const meeting = await findOutreachMeeting(meetingId);
+
+  if (!meeting) {
+    return (
+      <div className="grid gap-4">
+        <PageHeader
+          description="未找到对应外联会议。当前详情页只读取外联会议记录。"
+          title="会议不存在"
+        />
+        <Link
+          className="text-sm font-medium text-brand"
+          href="/admin/outreach-meetings"
+        >
+          返回外联会议列表
+        </Link>
+      </div>
+    );
+  }
+
+  const requestHeaders = await headers();
+  const host = requestHeaders.get("host") ?? "localhost:3000";
+  const protocol = requestHeaders.get("x-forwarded-proto") ?? "http";
+  const registrationUrl = `${protocol}://${host}/m/register/${meeting.id}`;
+  const checkinUrl = `${protocol}://${host}/m/checkin/${meeting.id}`;
+  const [registrationQrCode, checkinQrCode, registrations] = await Promise.all([
+    createQrCode(registrationUrl),
+    createQrCode(checkinUrl),
+    listRegistrationsByMeeting(meeting.id),
+  ]);
+  const checkedInCount = registrations.filter(
+    (registration) => registration.checkinStatus === "checked_in",
+  ).length;
+  const walkInCount = registrations.filter(
+    (registration) => registration.isWalkIn,
+  ).length;
+  const notCheckedInCount = registrations.length - checkedInCount;
+
+  return (
+    <div className="grid gap-6">
+      <PageHeader
+        actions={
+          <>
+            <Link
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50"
+              href={`/admin/outreach-meetings/${meeting.id}/registrations/export`}
+            >
+              <Download aria-hidden="true" className="h-4 w-4" />
+              导出报名数据
+            </Link>
+            <Link
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-brand px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-blue-700"
+              href={`/admin/outreach-meetings/${meeting.id}/checkins/export`}
+            >
+              <Download aria-hidden="true" className="h-4 w-4" />
+              导出签到数据
+            </Link>
+          </>
+        }
+        description="查看外联会议的报名二维码、签到二维码、报名人员和签到结果。"
+        title={meeting.title}
+      />
+
+      <section className="grid gap-4 md:grid-cols-4">
+        <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-panel">
+          <p className="text-sm text-muted">报名人数</p>
+          <p className="mt-2 text-3xl font-semibold text-ink">
+            {numberFormatter.format(registrations.length)}
+          </p>
+        </article>
+        <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-panel">
+          <p className="text-sm text-muted">已签到人数</p>
+          <p className="mt-2 text-3xl font-semibold text-success">
+            {numberFormatter.format(checkedInCount)}
+          </p>
+        </article>
+        <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-panel">
+          <p className="text-sm text-muted">未签到人数</p>
+          <p className="mt-2 text-3xl font-semibold text-warning">
+            {numberFormatter.format(notCheckedInCount)}
+          </p>
+        </article>
+        <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-panel">
+          <p className="text-sm text-muted">现场补报名</p>
+          <p className="mt-2 text-3xl font-semibold text-brand">
+            {numberFormatter.format(walkInCount)}
+          </p>
+        </article>
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-2">
+        <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-panel">
+          <h2 className="text-base font-semibold text-ink">报名二维码</h2>
+          <p className="mt-2 text-sm leading-6 text-muted">
+            用户扫码后进入移动端报名页，提交后会写入当前会议的报名列表。
+          </p>
+          <div className="mt-4 flex justify-center rounded-lg border border-slate-200 bg-white p-4">
+            <Image
+              alt={`${meeting.title} 报名二维码`}
+              height={220}
+              src={registrationQrCode}
+              width={220}
+              unoptimized
+            />
+          </div>
+          <p className="mt-4 break-all rounded-md bg-slate-50 p-3 text-sm text-slate-700">
+            {registrationUrl}
+          </p>
+          <Link
+            className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50"
+            href={`/m/register/${meeting.id}`}
+            target="_blank"
+          >
+            <ExternalLink aria-hidden="true" className="h-4 w-4" />
+            打开报名页
+          </Link>
+        </article>
+
+        <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-panel">
+          <h2 className="text-base font-semibold text-ink">签到二维码</h2>
+          <p className="mt-2 text-sm leading-6 text-muted">
+            现场摆放该二维码。已报名用户确认签到，未报名用户补报名后自动签到。
+          </p>
+          <div className="mt-4 flex justify-center rounded-lg border border-slate-200 bg-white p-4">
+            <Image
+              alt={`${meeting.title} 签到二维码`}
+              height={220}
+              src={checkinQrCode}
+              width={220}
+              unoptimized
+            />
+          </div>
+          <p className="mt-4 break-all rounded-md bg-slate-50 p-3 text-sm text-slate-700">
+            {checkinUrl}
+          </p>
+          <Link
+            className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50"
+            href={`/m/checkin/${meeting.id}`}
+            target="_blank"
+          >
+            <ExternalLink aria-hidden="true" className="h-4 w-4" />
+            打开签到页
+          </Link>
+        </article>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-panel">
+        <h2 className="text-base font-semibold text-ink">会议信息</h2>
+        <dl className="mt-5 grid gap-4 md:grid-cols-4">
+          <div>
+            <dt className="text-sm text-muted">会议时间</dt>
+            <dd className="mt-1 text-sm font-medium text-ink">
+              {dateFormatter.format(new Date(meeting.startTime))}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-sm text-muted">会议地点</dt>
+            <dd className="mt-1 text-sm font-medium text-ink">
+              {meeting.location}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-sm text-muted">所属区域</dt>
+            <dd className="mt-1 text-sm font-medium text-ink">
+              {meeting.region ?? "-"}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-sm text-muted">会议状态</dt>
+            <dd className="mt-1">
+              <StatusBadge status={meeting.status} />
+            </dd>
+          </div>
+        </dl>
+      </section>
+
+      <DataTableShell
+        description="报名和签到共用同一条参会记录，重复签到不会新增记录或重复计数。"
+        title={`报名与签到数据（${registrations.length} 人）`}
+      >
+        <table className="w-full min-w-[1320px] text-left text-sm">
+          <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500">
+            <tr>
+              <th className="px-5 py-3">姓名</th>
+              <th className="px-5 py-3">单位类型</th>
+              <th className="px-5 py-3">单位名称</th>
+              <th className="px-5 py-3">职位</th>
+              <th className="px-5 py-3">手机号</th>
+              <th className="px-5 py-3">用餐</th>
+              <th className="px-5 py-3">报名来源</th>
+              <th className="px-5 py-3">报名状态</th>
+              <th className="px-5 py-3">签到状态</th>
+              <th className="px-5 py-3">签到时间</th>
+              <th className="px-5 py-3">签到方式</th>
+              <th className="px-5 py-3">现场补报名</th>
+              <th className="px-5 py-3">备注</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {registrations.map((registration) => (
+              <tr key={registration.id}>
+                <td className="px-5 py-4 font-medium text-ink">
+                  {registration.name}
+                </td>
+                <td className="px-5 py-4 text-slate-600">
+                  {getOrganizationLabel(
+                    registration.organizationType,
+                    registration.otherOrganizationType,
+                  )}
+                </td>
+                <td className="px-5 py-4 text-slate-600">
+                  {registration.organizationName}
+                </td>
+                <td className="px-5 py-4 text-slate-600">
+                  {registration.position ?? "-"}
+                </td>
+                <td className="px-5 py-4 text-slate-600">
+                  {registration.phone}
+                </td>
+                <td className="px-5 py-4 text-slate-600">
+                  {mealPreferenceLabels[registration.meal]}
+                </td>
+                <td className="px-5 py-4 text-slate-600">
+                  {registrationSourceLabels[registration.source]}
+                </td>
+                <td className="px-5 py-4 text-slate-600">
+                  {registrationStatusLabels[registration.status]}
+                </td>
+                <td className="px-5 py-4 text-slate-600">
+                  {checkinStatusLabels[registration.checkinStatus]}
+                </td>
+                <td className="px-5 py-4 text-slate-600">
+                  {registration.checkinAt
+                    ? dateFormatter.format(new Date(registration.checkinAt))
+                    : "-"}
+                </td>
+                <td className="px-5 py-4 text-slate-600">
+                  {registration.checkinMethod
+                    ? checkinMethodLabels[registration.checkinMethod]
+                    : "-"}
+                </td>
+                <td className="px-5 py-4 text-slate-600">
+                  {registration.isWalkIn ? "是" : "否"}
+                </td>
+                <td className="px-5 py-4 text-slate-600">
+                  {registration.notes ?? "-"}
+                </td>
+              </tr>
+            ))}
+            {registrations.length === 0 ? (
+              <tr>
+                <td
+                  className="px-5 py-10 text-center text-sm text-muted"
+                  colSpan={13}
+                >
+                  暂无报名和签到数据。可以先使用报名二维码收集参会信息。
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </DataTableShell>
+    </div>
+  );
+}
