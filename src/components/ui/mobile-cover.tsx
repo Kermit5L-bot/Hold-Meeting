@@ -24,13 +24,10 @@ export function MobileCover({
           onError={() => setFailed(true)}
           sizes="(max-width: 768px) 100vw, 448px"
           src={imageSrc}
+          unoptimized
         />
       ) : (
-        <div className="flex h-full w-full items-end bg-[radial-gradient(circle_at_20%_20%,rgba(255,255,255,0.22),transparent_32%),linear-gradient(135deg,#1d4ed8,#0f172a_58%,#047857)] p-5">
-          <span className="rounded bg-white/15 px-2 py-1 text-xs font-medium text-white/90">
-            市场部会议服务
-          </span>
-        </div>
+        <div className="h-full w-full bg-[radial-gradient(circle_at_20%_20%,rgba(255,255,255,0.22),transparent_32%),linear-gradient(135deg,#1d4ed8,#0f172a_58%,#047857)]" />
       )}
     </div>
   );

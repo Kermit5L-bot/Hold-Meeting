@@ -4,10 +4,15 @@ import { findOutreachMeeting } from "@/lib/outreach-meetings-store";
 import {
   createRegistration,
   findRegistrationById,
+  listRegistrationsByMeeting,
   updateRegistrationWecomNotifyStatus,
 } from "@/lib/registrations-store";
 import type { RegistrationFormValues } from "@/lib/types";
-import { notifyWecomRegistration } from "@/lib/wecom-notifier";
+import {
+  buildWecomMeetingStats,
+  notifyWecomRegistration,
+  type WecomMeetingStats,
+} from "@/lib/wecom-notifier";
 
 function validateRegistration(values: RegistrationFormValues) {
   if (!values.meetingId.trim()) {
@@ -47,7 +52,25 @@ async function sendWecomNotifyIfNeeded(registrationId: string) {
     return;
   }
 
-  const result = await notifyWecomRegistration(meeting.meeting, meeting.registration);
+  let stats: WecomMeetingStats | undefined;
+
+  try {
+    stats = buildWecomMeetingStats(
+      await listRegistrationsByMeeting(meeting.meeting.id),
+    );
+  } catch (error) {
+    console.error("读取企业微信报名统计失败", {
+      meetingId: meeting.meeting.id,
+      registrationId,
+      error,
+    });
+  }
+
+  const result = await notifyWecomRegistration(
+    meeting.meeting,
+    meeting.registration,
+    stats,
+  );
 
   if ("skipped" in result && result.skipped) {
     return;

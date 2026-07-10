@@ -3,6 +3,8 @@ import { MobileFormShell } from "@/components/ui/mobile-form-shell";
 import { findOutreachMeeting } from "@/lib/outreach-meetings-store";
 import { dateFormatter } from "@/lib/utils";
 
+export const dynamic = "force-dynamic";
+
 export default async function MobileSuccessPage({
   searchParams,
 }: {

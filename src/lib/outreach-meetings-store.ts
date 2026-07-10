@@ -28,6 +28,8 @@ const seedMeetings: OutreachMeeting[] = [
     enableWecomNotify: false,
     wecomWebhook: "",
     wecomGroupName: "",
+    enableWecomCheckinSummaryNotify: false,
+    wecomCheckinSummaryIntervalMinutes: 15,
     registrationCount: 0,
     checkinCount: 0,
     walkInCount: 0,
@@ -54,6 +56,8 @@ const seedMeetings: OutreachMeeting[] = [
     enableWecomNotify: false,
     wecomWebhook: "",
     wecomGroupName: "",
+    enableWecomCheckinSummaryNotify: false,
+    wecomCheckinSummaryIntervalMinutes: 15,
     registrationCount: 0,
     checkinCount: 0,
     walkInCount: 0,
@@ -93,6 +97,10 @@ function normalizeMeeting(meeting: OutreachMeeting): OutreachMeeting {
     enableWecomNotify: meeting.enableWecomNotify ?? false,
     wecomWebhook: meeting.wecomWebhook ?? "",
     wecomGroupName: meeting.wecomGroupName ?? "",
+    enableWecomCheckinSummaryNotify:
+      meeting.enableWecomCheckinSummaryNotify ?? false,
+    wecomCheckinSummaryIntervalMinutes:
+      meeting.wecomCheckinSummaryIntervalMinutes ?? 15,
     registrationCount: meeting.registrationCount ?? 0,
     checkinCount: meeting.checkinCount ?? 0,
     walkInCount: meeting.walkInCount ?? 0,
@@ -126,6 +134,11 @@ function formToOutreachMeeting(
 ): OutreachMeeting {
   const timestamp = new Date().toISOString();
   const enableWecomNotify = Boolean(values.enableWecomNotify);
+  const enableWecomCheckinSummaryNotify = Boolean(
+    values.enableWecomNotify &&
+      values.wecomWebhook.trim() &&
+      values.enableWecomCheckinSummaryNotify,
+  );
 
   return {
     id:
@@ -153,6 +166,9 @@ function formToOutreachMeeting(
     enableWecomNotify,
     wecomWebhook: enableWecomNotify ? values.wecomWebhook.trim() : "",
     wecomGroupName: values.wecomGroupName.trim() || undefined,
+    enableWecomCheckinSummaryNotify,
+    wecomCheckinSummaryIntervalMinutes:
+      values.wecomCheckinSummaryIntervalMinutes ?? 15,
     registrationCount: existing?.registrationCount ?? 0,
     checkinCount: existing?.checkinCount ?? 0,
     walkInCount: existing?.walkInCount ?? 0,

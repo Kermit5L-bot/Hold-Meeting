@@ -2,6 +2,8 @@ import { ExternalForumManager } from "@/components/admin/external-forum-manager"
 import { readExternalForums } from "@/lib/external-forums-store";
 import { readActiveSettingsOptions } from "@/lib/settings-options";
 
+export const dynamic = "force-dynamic";
+
 export default async function ExternalForumsPage() {
   const records = await readExternalForums();
   const [departmentOptions, costTypeOptions] = await Promise.all([

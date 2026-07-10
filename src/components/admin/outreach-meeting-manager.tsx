@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { Bell, Edit3, ImagePlus, Plus, Search, Trash2, Users, X } from "lucide-react";
 import { CsvImportDialog } from "@/components/admin/csv-import-dialog";
 import { PrimaryButton } from "@/components/admin/primary-button";
@@ -52,6 +53,8 @@ const emptyForm: MeetingFormValues = {
   enableWecomNotify: false,
   wecomWebhook: "",
   wecomGroupName: "",
+  enableWecomCheckinSummaryNotify: false,
+  wecomCheckinSummaryIntervalMinutes: 15,
 };
 
 function toInputDateTime(value?: string) {
@@ -75,6 +78,10 @@ function buildForm(meeting: OutreachMeeting): MeetingFormValues {
     enableWecomNotify: meeting.enableWecomNotify ?? false,
     wecomWebhook: meeting.wecomWebhook ?? "",
     wecomGroupName: meeting.wecomGroupName ?? "",
+    enableWecomCheckinSummaryNotify:
+      meeting.enableWecomCheckinSummaryNotify ?? false,
+    wecomCheckinSummaryIntervalMinutes:
+      meeting.wecomCheckinSummaryIntervalMinutes ?? 15,
   };
 }
 
@@ -95,6 +102,11 @@ function CoverUploadField({
 }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
+  const [previewFailed, setPreviewFailed] = useState(false);
+
+  useEffect(() => {
+    setPreviewFailed(false);
+  }, [value]);
 
   async function uploadCover(file: File) {
     setError("");
@@ -143,15 +155,21 @@ function CoverUploadField({
         <ImagePlus aria-hidden="true" className="mt-0.5 h-5 w-5 text-brand" />
       </div>
 
-      {value ? (
+      {value && !previewFailed ? (
         <div className="relative h-36 overflow-hidden rounded-md border border-slate-200 bg-white">
           <Image
             alt="会议头图预览"
             className="object-cover"
             fill
+            onError={() => setPreviewFailed(true)}
             sizes="(max-width: 768px) 100vw, 768px"
             src={value}
+            unoptimized
           />
+        </div>
+      ) : value ? (
+        <div className="flex h-32 items-center justify-center rounded-md border border-dashed border-amber-300 bg-amber-50 px-4 text-center text-sm text-amber-800">
+          头图已上传，但当前地址暂时无法预览。请确认服务器已开放 public/uploads 目录。
         </div>
       ) : (
         <div className="flex h-32 items-center justify-center rounded-md border border-dashed border-slate-300 bg-gradient-to-r from-blue-50 via-slate-50 to-emerald-50 text-sm text-muted">
@@ -399,7 +417,7 @@ function OutreachFormDialog({
               <div>
                 <h3 className="text-sm font-semibold text-ink">企业微信报名群通知</h3>
                 <p className="mt-1 text-xs leading-5 text-muted">
-                  开启后，会前报名成功和现场补报名并签到成功会推送到配置的企业微信群。普通签到成功不会推送。
+                  开启后，会前报名成功和现场补报名并签到成功会推送到配置的企业微信群。普通签到成功不会逐人推送，可单独开启签到进度汇总。
                 </p>
               </div>
             </div>
@@ -441,6 +459,45 @@ function OutreachFormDialog({
                     value={values.wecomGroupName}
                   />
                 </label>
+                <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-3 md:col-span-2">
+                  <label className="flex items-center gap-2 text-sm font-medium text-ink">
+                    <input
+                      checked={values.enableWecomCheckinSummaryNotify}
+                      name="enableWecomCheckinSummaryNotify"
+                      onChange={(event) =>
+                        update(
+                          "enableWecomCheckinSummaryNotify",
+                          event.target.checked,
+                        )
+                      }
+                      type="checkbox"
+                    />
+                    开启签到进度汇总通知
+                  </label>
+                  <p className="text-xs leading-5 text-muted">
+                    开启后，仅在会议开始前 60 分钟到开始后 30 分钟内按频率推送；已签到人数无变化不推送，到场率 100% 后停止。
+                  </p>
+                  {values.enableWecomCheckinSummaryNotify ? (
+                    <label className="grid gap-1.5 text-sm font-medium text-ink">
+                      汇总频率
+                      <select
+                        className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-ink"
+                        name="wecomCheckinSummaryIntervalMinutes"
+                        onChange={(event) =>
+                          update(
+                            "wecomCheckinSummaryIntervalMinutes",
+                            Number(event.target.value) as 10 | 15 | 30,
+                          )
+                        }
+                        value={values.wecomCheckinSummaryIntervalMinutes}
+                      >
+                        <option value={10}>每 10 分钟</option>
+                        <option value={15}>每 15 分钟</option>
+                        <option value={30}>每 30 分钟</option>
+                      </select>
+                    </label>
+                  ) : null}
+                </div>
               </div>
             ) : null}
           </section>
@@ -492,6 +549,7 @@ export function OutreachMeetingManager({
   departmentOptions: SelectOption[];
   regionOptions: SelectOption[];
 }) {
+  const router = useRouter();
   const [meetings, setMeetings] = useState(initialMeetings);
   const [filters, setFilters] = useState(emptyFilters);
   const [formMode, setFormMode] = useState<"create" | "edit" | null>(null);
@@ -499,6 +557,10 @@ export function OutreachMeetingManager({
   const [formValues, setFormValues] = useState(emptyForm);
   const [error, setError] = useState("");
   const [pendingDelete, setPendingDelete] = useState<OutreachMeeting | null>(null);
+
+  useEffect(() => {
+    setMeetings(initialMeetings);
+  }, [initialMeetings]);
 
   const years = useMemo(() => getAvailableYears(meetings), [meetings]);
   const filteredMeetings = useMemo(
@@ -558,13 +620,24 @@ export function OutreachMeetingManager({
           )
         : [savedMeeting, ...current],
     );
+    router.refresh();
     setFormMode(null);
     setEditingId(null);
   }
 
   async function deleteMeeting(meeting: OutreachMeeting) {
-    await fetch(`/api/outreach-meetings/${meeting.id}`, { method: "DELETE" });
+    const response = await fetch(`/api/outreach-meetings/${meeting.id}`, {
+      method: "DELETE",
+    });
+
+    if (!response.ok) {
+      setError("删除失败，请刷新后重试。");
+      setPendingDelete(null);
+      return;
+    }
+
     setMeetings((current) => current.filter((item) => item.id !== meeting.id));
+    router.refresh();
     setPendingDelete(null);
   }
 

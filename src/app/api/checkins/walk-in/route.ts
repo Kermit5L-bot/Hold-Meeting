@@ -4,10 +4,15 @@ import { isValidPhoneLength, phoneLengthMessage } from "@/lib/phone";
 import {
   createWalkInRegistrationAndCheckin,
   findRegistrationById,
+  listRegistrationsByMeeting,
   updateRegistrationWecomNotifyStatus,
 } from "@/lib/registrations-store";
 import type { RegistrationFormValues } from "@/lib/types";
-import { notifyWecomWalkInCheckin } from "@/lib/wecom-notifier";
+import {
+  buildWecomMeetingStats,
+  notifyWecomWalkInCheckin,
+  type WecomMeetingStats,
+} from "@/lib/wecom-notifier";
 
 function validateRegistration(values: RegistrationFormValues) {
   if (!values.meetingId.trim()) {
@@ -51,7 +56,19 @@ async function sendWecomNotifyIfNeeded(registrationId: string, meetingId: string
     return;
   }
 
-  const result = await notifyWecomWalkInCheckin(meeting, registration);
+  let stats: WecomMeetingStats | undefined;
+
+  try {
+    stats = buildWecomMeetingStats(await listRegistrationsByMeeting(meetingId));
+  } catch (error) {
+    console.error("读取企业微信签到统计失败", {
+      meetingId,
+      registrationId,
+      error,
+    });
+  }
+
+  const result = await notifyWecomWalkInCheckin(meeting, registration, stats);
 
   if ("skipped" in result && result.skipped) {
     return;

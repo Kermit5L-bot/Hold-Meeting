@@ -19,6 +19,8 @@ import { listRegistrationsByMeeting } from "@/lib/registrations-store";
 import type { OrganizationType } from "@/lib/types";
 import { dateFormatter, numberFormatter } from "@/lib/utils";
 
+export const dynamic = "force-dynamic";
+
 function getOrganizationLabel(
   organizationType: OrganizationType,
   otherOrganizationType?: string,
@@ -39,6 +41,50 @@ async function createQrCode(url: string) {
       light: "#FFFFFF",
     },
   });
+}
+
+function getFirstHeaderValue(value: string | null) {
+  return value?.split(",")[0]?.trim() ?? "";
+}
+
+function normalizeBaseUrl(value: string | undefined) {
+  const trimmedValue = value?.trim();
+
+  if (!trimmedValue) {
+    return null;
+  }
+
+  try {
+    const url = new URL(
+      trimmedValue.includes("://") ? trimmedValue : `https://${trimmedValue}`,
+    );
+
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return null;
+  }
+}
+
+function getPublicBaseUrl(requestHeaders: { get(name: string): string | null }) {
+  const configuredBaseUrl = normalizeBaseUrl(
+    process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_APP_BASE_URL,
+  );
+
+  if (configuredBaseUrl) {
+    return configuredBaseUrl;
+  }
+
+  const forwardedHost = getFirstHeaderValue(
+    requestHeaders.get("x-forwarded-host"),
+  );
+  const host = forwardedHost || getFirstHeaderValue(requestHeaders.get("host"));
+  const protocol =
+    getFirstHeaderValue(requestHeaders.get("x-forwarded-proto")) ||
+    (host.startsWith("localhost") || host.startsWith("127.0.0.1")
+      ? "http"
+      : "https");
+
+  return `${protocol}://${host || "localhost:3000"}`;
 }
 
 export default async function OutreachMeetingDetailPage({
@@ -67,10 +113,9 @@ export default async function OutreachMeetingDetailPage({
   }
 
   const requestHeaders = await headers();
-  const host = requestHeaders.get("host") ?? "localhost:3000";
-  const protocol = requestHeaders.get("x-forwarded-proto") ?? "http";
-  const registrationUrl = `${protocol}://${host}/m/register/${meeting.id}`;
-  const checkinUrl = `${protocol}://${host}/m/checkin/${meeting.id}`;
+  const publicBaseUrl = getPublicBaseUrl(requestHeaders);
+  const registrationUrl = `${publicBaseUrl}/m/register/${meeting.id}`;
+  const checkinUrl = `${publicBaseUrl}/m/checkin/${meeting.id}`;
   const [registrationQrCode, checkinQrCode, registrations] = await Promise.all([
     createQrCode(registrationUrl),
     createQrCode(checkinUrl),

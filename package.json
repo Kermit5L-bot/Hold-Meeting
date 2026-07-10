@@ -1,6 +1,6 @@
 {
   "name": "marketing-meeting-admin",
-  "version": "0.1.0",
+  "version": "1.1.0",
   "private": true,
   "engines": {
     "node": ">=24.0.0"
@@ -9,7 +9,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint . --no-cache",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

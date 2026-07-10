@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import {
   createOutreachMeeting,
   readOutreachMeetings,
@@ -11,6 +12,9 @@ function validate(values: MeetingFormValues) {
   if (!values.location.trim()) return "请填写会议地点。";
   if (values.enableWecomNotify && !values.wecomWebhook.trim()) {
     return "开启企业微信通知后，请填写企业微信机器人 Webhook。";
+  }
+  if (![10, 15, 30].includes(values.wecomCheckinSummaryIntervalMinutes ?? 15)) {
+    return "请选择有效的签到汇总频率。";
   }
   return null;
 }
@@ -29,5 +33,7 @@ export async function POST(request: Request) {
   }
 
   const meeting = await createOutreachMeeting(values);
+  revalidatePath("/admin");
+  revalidatePath("/admin/outreach-meetings");
   return NextResponse.json({ meeting });
 }

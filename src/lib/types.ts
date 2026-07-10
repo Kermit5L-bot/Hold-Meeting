@@ -36,6 +36,8 @@ export interface OutreachMeeting extends MeetingBase {
   enableWecomNotify: boolean;
   wecomWebhook?: string;
   wecomGroupName?: string;
+  enableWecomCheckinSummaryNotify: boolean;
+  wecomCheckinSummaryIntervalMinutes: 10 | 15 | 30;
   registrationCount: number;
   checkinCount: number;
   walkInCount: number;
@@ -87,6 +89,8 @@ export interface MeetingFormValues {
   enableWecomNotify: boolean;
   wecomWebhook: string;
   wecomGroupName: string;
+  enableWecomCheckinSummaryNotify: boolean;
+  wecomCheckinSummaryIntervalMinutes: 10 | 15 | 30;
 }
 
 export type OrganizationType =

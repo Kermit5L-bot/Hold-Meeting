@@ -2,6 +2,8 @@ import { OutreachMeetingManager } from "@/components/admin/outreach-meeting-mana
 import { readOutreachMeetings } from "@/lib/outreach-meetings-store";
 import { readActiveSettingsOptions } from "@/lib/settings-options";
 
+export const dynamic = "force-dynamic";
+
 export default async function OutreachMeetingsPage() {
   const meetings = await readOutreachMeetings();
   const [departmentOptions, regionOptions] = await Promise.all([

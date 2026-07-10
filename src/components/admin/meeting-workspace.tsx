@@ -60,6 +60,8 @@ const emptyForm: MeetingFormValues = {
   enableWecomNotify: false,
   wecomWebhook: "",
   wecomGroupName: "",
+  enableWecomCheckinSummaryNotify: false,
+  wecomCheckinSummaryIntervalMinutes: 15,
 };
 
 function toDateTimeInputValue(value?: string) {
@@ -93,6 +95,14 @@ function buildFormValues(meeting: Meeting): MeetingFormValues {
     wecomWebhook: meeting.type === "outreach" ? meeting.wecomWebhook ?? "" : "",
     wecomGroupName:
       meeting.type === "outreach" ? meeting.wecomGroupName ?? "" : "",
+    enableWecomCheckinSummaryNotify:
+      meeting.type === "outreach"
+        ? meeting.enableWecomCheckinSummaryNotify ?? false
+        : false,
+    wecomCheckinSummaryIntervalMinutes:
+      meeting.type === "outreach"
+        ? meeting.wecomCheckinSummaryIntervalMinutes ?? 15
+        : 15,
   };
 }
 
@@ -135,6 +145,10 @@ function createTypedMeeting(
       enableWecomNotify: previous?.enableWecomNotify ?? false,
       wecomWebhook: previous?.wecomWebhook ?? "",
       wecomGroupName: previous?.wecomGroupName ?? "",
+      enableWecomCheckinSummaryNotify:
+        previous?.enableWecomCheckinSummaryNotify ?? false,
+      wecomCheckinSummaryIntervalMinutes:
+        previous?.wecomCheckinSummaryIntervalMinutes ?? 15,
       registrationCount: previous?.registrationCount ?? 0,
       checkinCount: previous?.checkinCount ?? 0,
       walkInCount: previous?.walkInCount ?? 0,

@@ -4,6 +4,8 @@ import { readMarketingMeetings } from "@/lib/marketing-meetings-store";
 import { readOutreachMeetings } from "@/lib/outreach-meetings-store";
 import { readRegistrations } from "@/lib/registrations-store";
 
+export const dynamic = "force-dynamic";
+
 export default async function AdminHomePage() {
   const [registrations, externalForums, marketingMeetings, outreachMeetings] =
     await Promise.all([

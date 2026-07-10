@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Hold Meeting v1.1 运维部署需求</title>
+  <style>
+    body { font-family: "Microsoft YaHei", Arial, sans-serif; line-height: 1.65; color: #1f2933; }
+    h1 { font-size: 26px; color: #17365d; }
+    h2 { font-size: 18px; color: #1f4e79; border-bottom: 1px solid #d9e2ec; padding-bottom: 4px; margin-top: 24px; }
+    p { margin: 8px 0; }
+    ul { margin-top: 6px; }
+    code, pre { font-family: Consolas, "Courier New", monospace; }
+    pre { background: #f4f6f8; border: 1px solid #d9e2ec; padding: 10px 12px; white-space: pre-wrap; }
+    .meta { color: #52616b; }
+    .warning { color: #8a3b12; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Hold Meeting v1.1 运维部署需求</h1>
+  <p class="meta">适用项目：市场部会议信息收集管理系统</p>
+  <p class="meta">仓库：https://github.com/Kermit5L-bot/Hold-Meeting</p>
+  <p class="meta">版本：v1.1.0 / main 分支</p>
+
+  <h2>1. 运行环境</h2>
+  <ul>
+    <li>Node.js：必须使用 Node.js 24 或以上。</li>
+    <li>npm：随 Node.js 安装即可。</li>
+    <li>部署方式：单 Node 进程运行。</li>
+    <li class="warning">不要使用 PM2 cluster、多 Node 进程或多实例同时写同一个 SQLite 文件。</li>
+  </ul>
+
+  <h2>2. 拉取与构建</h2>
+  <pre>git clone https://github.com/Kermit5L-bot/Hold-Meeting.git
+cd Hold-Meeting
+git checkout v1.1.0
+npm ci
+npm run build</pre>
+
+  <h2>3. 启动命令</h2>
+  <pre>npm run start -- -p 3000</pre>
+  <p>如使用 PM2，只能单实例：</p>
+  <pre>pm2 start npm --name hold-meeting -- start -- -p 3000
+pm2 save</pre>
+
+  <h2>4. 环境变量</h2>
+  <p>生产环境必须配置：</p>
+  <pre>ADMIN_SESSION_SECRET=请生成至少32位随机字符串
+ADMIN_INITIAL_PASSWORD=首次部署临时管理员密码
+APP_BASE_URL=https://meeting.example.com
+REGISTRATIONS_DB_PATH=data/registrations.sqlite
+NODE_ENV=production</pre>
+  <ul>
+    <li><code>ADMIN_SESSION_SECRET</code> 必须配置，不能使用默认开发密钥。</li>
+    <li><code>ADMIN_INITIAL_PASSWORD</code> 只在首次没有管理员账号时生效。</li>
+    <li><code>APP_BASE_URL</code> 建议配置为正式访问域名，用于生成报名/签到链接。</li>
+    <li><code>REGISTRATIONS_DB_PATH</code> 可改为服务器持久化目录，例如 <code>/data/hold-meeting/registrations.sqlite</code>。</li>
+  </ul>
+
+  <h2>5. 持久化目录与备份</h2>
+  <p>必须持久化并备份：</p>
+  <pre>data/
+public/uploads/</pre>
+  <p>重点文件：</p>
+  <pre>data/registrations.sqlite
+data/registrations.sqlite-wal
+data/registrations.sqlite-shm
+data/settings.json
+data/outreach-meetings.json
+data/marketing-meetings.json
+data/external-forums.json
+data/admin-users.json
+data/wecom-checkin-summary-state.json</pre>
+  <p class="warning">注意：data/admin-users.json 和企业微信汇总状态文件需要在服务器保留和备份，但不要提交到 Git。</p>
+
+  <h2>6. 反向代理要求</h2>
+  <p>建议使用 Nginx / IIS / 公司网关反向代理到 Node 服务端口，例如 3000。</p>
+  <p>需要保留请求头：</p>
+  <pre>Host
+X-Forwarded-Proto
+X-Forwarded-For</pre>
+  <p>建议启用 HTTPS。</p>
+
+  <h2>7. 上传文件</h2>
+  <p>会议头图上传目录：</p>
+  <pre>public/uploads/</pre>
+  <p>发布新版本时不能清空该目录。建议将其挂载到持久化目录或纳入备份策略。</p>
+
+  <h2>8. 部署限制</h2>
+  <p>当前 v1.1 使用 SQLite 处理报名/签到并发，适合单机部署和几百人集中报名场景。</p>
+  <p>不要这样部署：</p>
+  <ul>
+    <li>PM2 cluster。</li>
+    <li>多个 Node 进程。</li>
+    <li>多台服务器同时写同一个 SQLite 文件。</li>
+    <li>容器每次发布清空 data 或 public/uploads。</li>
+  </ul>
+  <p>如果后续需要多实例或高可用，应迁移到 PostgreSQL/MySQL/SQL Server。</p>
+
+  <h2>9. v1.1 额外说明</h2>
+  <ul>
+    <li>v1.1 增加企业微信签到进度汇总相关能力。</li>
+    <li>该能力依赖 Node 服务常驻运行；如果服务重启，汇总状态会从持久化状态文件继续读取。</li>
+    <li>如果使用多个 Node 进程，可能重复发送汇总消息，因此仍要求单进程部署。</li>
+  </ul>
+
+  <h2>10. 上线前检查</h2>
+  <pre>npm run build
+npm run start -- -p 3000</pre>
+  <p>然后访问：</p>
+  <pre>/login
+/admin</pre>
+  <p>确认：</p>
+  <ul>
+    <li>登录页能打开。</li>
+    <li>后台未登录会跳转到登录页。</li>
+    <li>登录后能创建会议。</li>
+    <li>上传会议头图正常。</li>
+    <li>报名链接能打开。</li>
+    <li>报名后数据能在后台看到。</li>
+    <li>企业微信报名/签到通知按配置工作。</li>
+  </ul>
+
+  <h2>11. 备份建议</h2>
+  <p>至少每天备份 <code>data/</code> 和 <code>public/uploads/</code>。会议活动当天建议提高备份频率，或在活动前手动备份一次。</p>
+</body>
+</html>

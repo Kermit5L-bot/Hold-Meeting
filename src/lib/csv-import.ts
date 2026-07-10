@@ -595,6 +595,8 @@ async function buildOutreachMeetings(text: string) {
       enableWecomNotify: false,
       wecomWebhook: "",
       wecomGroupName: "",
+      enableWecomCheckinSummaryNotify: false,
+      wecomCheckinSummaryIntervalMinutes: 15,
       registrationCount: 0,
       checkinCount: 0,
       walkInCount: 0,
