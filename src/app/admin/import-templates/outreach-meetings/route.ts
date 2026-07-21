@@ -1,5 +1,7 @@
 import { templateResponse } from "@/lib/import-api";
+import { authorizeAdminRequest } from "@/lib/admin-access";
 
-export function GET() {
+export async function GET() {
+  const auth = await authorizeAdminRequest("outreach_meetings"); if ("response" in auth) return auth.response;
   return templateResponse("outreach-meetings");
 }

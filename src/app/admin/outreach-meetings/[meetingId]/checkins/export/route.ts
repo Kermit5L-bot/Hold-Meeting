@@ -6,18 +6,23 @@ import {
   registrationSourceLabels,
 } from "@/lib/registration-options";
 import { listRegistrationsByMeeting } from "@/lib/registrations-store";
-
-function csvCell(value: string | number | undefined) {
-  const text = String(value ?? "");
-  return `"${text.replaceAll("\"", "\"\"")}"`;
-}
+import { buildCsv } from "@/lib/spreadsheet-export";
+import { getAppDateStamp } from "@/lib/utils";
+import { authorizeAdminRequest, recordInScope, resolveVerifiedRequestScope } from "@/lib/admin-access";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ meetingId: string }> },
 ) {
   const { meetingId } = await params;
   const meeting = await findOutreachMeeting(meetingId);
+  const auth = await authorizeAdminRequest("outreach_meetings"); if ("response" in auth) return auth.response;
+  const scope = await resolveVerifiedRequestScope(auth.user, request);
+
+  if (!meeting || !scope || !recordInScope(meeting.ownerUserId, scope)) {
+    return NextResponse.json({ message: "未找到会议。" }, { status: 404 });
+  }
+
   const registrations = await listRegistrationsByMeeting(meetingId);
   const rows = [
     [
@@ -37,7 +42,7 @@ export async function GET(
     ...registrations.map((registration) => [
       registration.id,
       registration.meetingId,
-      meeting?.title ?? "",
+      meeting.title,
       registration.name,
       registration.organizationName,
       registration.phone,
@@ -51,13 +56,9 @@ export async function GET(
       "否",
     ]),
   ];
-  const csv = `\uFEFF${rows
-    .map((row) => row.map((cell) => csvCell(cell)).join(","))
-    .join("\n")}`;
+  const csv = buildCsv(rows);
   const fileName = encodeURIComponent(
-    `${meeting?.title ?? "外联会议"}_签到数据_${new Date()
-      .toISOString()
-      .slice(0, 10)}.csv`,
+    `${meeting.title}_签到数据_${getAppDateStamp()}.csv`,
   );
 
   return new NextResponse(csv, {

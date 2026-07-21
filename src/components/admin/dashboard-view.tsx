@@ -241,7 +241,10 @@ export function DashboardView({
         </div>
       </div>
 
-      <form className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-panel md:grid-cols-5">
+      <form
+        className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-panel md:grid-cols-5"
+        onSubmit={(event) => event.preventDefault()}
+      >
         <label className="grid gap-1 text-sm font-medium text-ink">
           年度
           <select

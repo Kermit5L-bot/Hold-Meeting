@@ -1,5 +1,10 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
+import {
+  mutateJsonCollection,
+  readJsonCollection,
+  type JsonCollectionConfig,
+} from "@/lib/sqlite-json-collection";
 import type {
   MarketingMeetingFormValues,
   MarketingMeetingRecord,
@@ -7,10 +12,12 @@ import type {
 
 const dataDir = path.join(process.cwd(), "data");
 const marketingMeetingsPath = path.join(dataDir, "marketing-meetings.json");
+const legacyOwnerUserId = "admin-super-001";
 
 const seedRecords: MarketingMeetingRecord[] = [
   {
     id: "marketing-record-001",
+    ownerUserId: legacyOwnerUserId,
     title: "营销中心月度复盘会",
     businessUnit: "营销中心",
     attendees: ["市场部", "客户工作组", "品牌组"],
@@ -25,6 +32,7 @@ const seedRecords: MarketingMeetingRecord[] = [
   },
   {
     id: "marketing-record-002",
+    ownerUserId: legacyOwnerUserId,
     title: "重点行业线索跟进协调会",
     businessUnit: "营销中心",
     attendees: ["市场部", "销售运营"],
@@ -38,39 +46,19 @@ const seedRecords: MarketingMeetingRecord[] = [
   },
 ];
 
-async function ensureDataFile() {
-  await mkdir(dataDir, { recursive: true });
-
-  try {
-    await readFile(marketingMeetingsPath, "utf8");
-  } catch {
-    await writeFile(
-      marketingMeetingsPath,
-      `${JSON.stringify(seedRecords, null, 2)}\n`,
-      "utf8",
-    );
-  }
-}
-
-async function writeMarketingMeetings(records: MarketingMeetingRecord[]) {
-  await ensureDataFile();
-  await writeFile(
-    marketingMeetingsPath,
-    `${JSON.stringify(records, null, 2)}\n`,
-    "utf8",
-  );
-}
+const marketingMeetingsCollection: JsonCollectionConfig<MarketingMeetingRecord> = {
+  name: "marketing-meetings",
+  legacyPath: marketingMeetingsPath,
+  seedRecords,
+  normalize: (record) => ({ ...record, ownerUserId: record.ownerUserId || legacyOwnerUserId }),
+};
 
 export async function readMarketingMeetings(): Promise<MarketingMeetingRecord[]> {
-  await ensureDataFile();
-  const raw = await readFile(marketingMeetingsPath, "utf8");
+  return readJsonCollection(marketingMeetingsCollection);
+}
 
-  try {
-    const parsed = JSON.parse(raw) as MarketingMeetingRecord[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+export function persistMarketingOwnershipMigration() {
+  return mutateJsonCollection(marketingMeetingsCollection, (records) => ({ records, result: undefined }));
 }
 
 function splitAttendees(value: string) {
@@ -82,22 +70,24 @@ function splitAttendees(value: string) {
 
 function formToRecord(
   values: MarketingMeetingFormValues,
+  ownerUserId: string,
   existing?: MarketingMeetingRecord,
 ): MarketingMeetingRecord {
   const timestamp = new Date().toISOString();
   const isOnline = values.locationType === "online";
 
   return {
-    id:
-      existing?.id ??
-      `marketing-record-${Date.now().toString(36)}-${Math.random()
-        .toString(36)
-        .slice(2, 8)}`,
+    id: existing?.id ?? `marketing-record-${randomUUID()}`,
+    ownerUserId: existing?.ownerUserId ?? ownerUserId,
     title: values.title.trim(),
     businessUnit: values.businessUnit.trim(),
     attendees: splitAttendees(values.attendeesText),
     meetingTime: values.meetingTime
-      ? `${values.meetingTime}:00+08:00`
+      ? `${
+          values.meetingTime.length === 16
+            ? `${values.meetingTime}:00`
+            : values.meetingTime
+        }+08:00`
       : timestamp,
     locationType: values.locationType,
     onlineUrl: isOnline ? values.onlineUrl.trim() : undefined,
@@ -106,45 +96,72 @@ function formToRecord(
     conclusion: values.conclusion.trim() || undefined,
     followUp: values.followUp.trim() || undefined,
     notes: values.notes.trim() || undefined,
+    importKey: existing?.importKey,
+    importedAt: existing?.importedAt,
+    importBatchId: existing?.importBatchId,
     createdAt: existing?.createdAt ?? timestamp,
     updatedAt: timestamp,
   };
 }
 
-export async function createMarketingMeeting(values: MarketingMeetingFormValues) {
-  const records = await readMarketingMeetings();
-  const record = formToRecord(values);
-  await writeMarketingMeetings([record, ...records]);
-  return record;
+export async function createMarketingMeeting(values: MarketingMeetingFormValues, ownerUserId: string) {
+  return mutateJsonCollection(marketingMeetingsCollection, (records) => {
+    const record = formToRecord(values, ownerUserId);
+    return { records: [record, ...records], result: record };
+  });
 }
 
 export async function updateMarketingMeeting(
   id: string,
   values: MarketingMeetingFormValues,
 ) {
-  const records = await readMarketingMeetings();
-  const existing = records.find((record) => record.id === id);
+  return mutateJsonCollection(marketingMeetingsCollection, (records) => {
+    const existing = records.find((record) => record.id === id);
 
-  if (!existing) {
-    return null;
-  }
+    if (!existing) {
+      return { records, result: null };
+    }
 
-  const nextRecord = formToRecord(values, existing);
-  await writeMarketingMeetings(
-    records.map((record) => (record.id === id ? nextRecord : record)),
-  );
-  return nextRecord;
+    const nextRecord = formToRecord(values, existing.ownerUserId, existing);
+    return {
+      records: records.map((record) =>
+        record.id === id ? nextRecord : record,
+      ),
+      result: nextRecord,
+    };
+  });
 }
 
 export async function deleteMarketingMeeting(id: string) {
-  const records = await readMarketingMeetings();
-  await writeMarketingMeetings(records.filter((record) => record.id !== id));
+  return mutateJsonCollection(marketingMeetingsCollection, (records) => {
+    const exists = records.some((record) => record.id === id);
+    return {
+      records: exists ? records.filter((record) => record.id !== id) : records,
+      result: exists,
+    };
+  });
 }
 
 export async function appendImportedMarketingMeetings(
   importedRecords: MarketingMeetingRecord[],
 ) {
-  const records = await readMarketingMeetings();
-  await writeMarketingMeetings([...importedRecords, ...records]);
-  return importedRecords;
+  return mutateJsonCollection(marketingMeetingsCollection, (records) => {
+    const existingKeys = new Set(
+      records.map((record) => `${record.ownerUserId}:${record.importKey}`).filter(Boolean),
+    );
+    const conflict = importedRecords.find(
+      (record) => record.importKey && existingKeys.has(`${record.ownerUserId}:${record.importKey}`),
+    );
+
+    if (conflict) {
+      throw new Error(
+        `历史导入编号 ${conflict.importKey} 已存在，请重新预览后再导入。`,
+      );
+    }
+
+    return {
+      records: [...importedRecords, ...records],
+      result: importedRecords,
+    };
+  });
 }

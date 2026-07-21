@@ -1,40 +1,33 @@
 import { NextResponse } from "next/server";
+import { parseExternalForumFormValues } from "@/lib/admin-form-request";
 import {
   createExternalForum,
   readExternalForums,
 } from "@/lib/external-forums-store";
-import type { ExternalForumFormValues } from "@/lib/types";
+import { authorizeAdminRequest, recordInScope, resolveVerifiedRequestScope, resolveWriteOwner } from "@/lib/admin-access";
+import { readAdminFormAllowedValues } from "@/lib/admin-form-options";
 
-function validate(values: ExternalForumFormValues) {
-  if (!values.title.trim()) return "请填写会议主题。";
-  if (!values.organizer.trim()) return "请填写主办单位。";
-  if (!values.meetingTime.trim()) return "请选择会议时间。";
-  if (!values.location.trim()) return "请填写会议地点。";
-  if (!values.attendeesText.trim()) return "请填写参会人。";
-  if (!values.businessUnit.trim()) return "请填写所属部门。";
-  if (values.hasSpeech === "yes") {
-    if (!values.speechTopic.trim()) return "请填写演讲题目。";
-    if (!values.speaker.trim()) return "请填写演讲人。";
-  }
-  if (values.sponsored === "yes" && !values.sponsorshipType.trim()) {
-    return "请填写赞助形式。";
-  }
-  return null;
-}
-
-export async function GET() {
-  const records = await readExternalForums();
+export async function GET(request: Request) {
+  const auth = await authorizeAdminRequest("external_forums");
+  if ("response" in auth) return auth.response;
+  const scope = await resolveVerifiedRequestScope(auth.user, request);
+  if (!scope) return NextResponse.json({ message: "无权查看该账号数据" }, { status: 403 });
+  const records = (await readExternalForums()).filter((item) => recordInScope(item.ownerUserId, scope));
   return NextResponse.json({ records });
 }
 
 export async function POST(request: Request) {
-  const values = (await request.json()) as ExternalForumFormValues;
-  const error = validate(values);
+  const auth = await authorizeAdminRequest("external_forums");
+  if ("response" in auth) return auth.response;
+  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+  const parsed = parseExternalForumFormValues(body, await readAdminFormAllowedValues());
 
-  if (error) {
-    return NextResponse.json({ message: error }, { status: 400 });
+  if (!parsed.values) {
+    return NextResponse.json({ message: parsed.error }, { status: 400 });
   }
 
-  const record = await createExternalForum(values);
+  const ownerUserId = await resolveWriteOwner(auth.user, request, body);
+  if (!ownerUserId) return NextResponse.json({ message: "请选择有效的数据归属账号" }, { status: 400 });
+  const record = await createExternalForum(parsed.values, ownerUserId);
   return NextResponse.json({ record });
 }

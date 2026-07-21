@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Hold Meeting v1.2 覆盖部署说明</title>
+  <style>
+    body { font-family: "Microsoft YaHei", Arial, sans-serif; line-height: 1.65; color: #1f2933; }
+    h1 { font-size: 26px; color: #17365d; }
+    h2 { font-size: 18px; color: #1f4e79; border-bottom: 1px solid #d9e2ec; padding-bottom: 4px; margin-top: 24px; }
+    p { margin: 8px 0; }
+    ul { margin-top: 6px; }
+    code, pre { font-family: Consolas, "Courier New", monospace; }
+    pre { background: #f4f6f8; border: 1px solid #d9e2ec; padding: 10px 12px; white-space: pre-wrap; }
+    .meta { color: #52616b; }
+    .warning { color: #8a3b12; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Hold Meeting v1.2 覆盖部署说明</h1>
+  <p class="meta">适用项目：市场部会议信息收集管理系统</p>
+  <p class="meta">仓库：https://github.com/Kermit5L-bot/Hold-Meeting</p>
+  <p class="meta">目标版本：v1.2.0</p>
+  <p class="meta">升级范围：使用 v1.2.0 覆盖当前 v1.1.0，保留生产数据库、上传文件和环境变量。</p>
+
+  <h2>1. 升级前确认</h2>
+  <ul>
+    <li>安排维护窗口，升级期间停止报名和签到写入。</li>
+    <li>确认当前生产版本、项目目录、Node 版本、进程管理方式和反向代理配置。</li>
+    <li>执行 <code>git status</code>，记录服务器是否存在未提交的本地代码改动。</li>
+    <li>确认数据盘和备份盘空间充足。</li>
+  </ul>
+
+  <h2>2. 停服并备份</h2>
+  <p>先停止应用，避免备份过程中继续写 SQLite：</p>
+  <pre>pm2 stop hold-meeting</pre>
+  <p>完整备份以下内容：</p>
+  <pre>data/
+public/uploads/
+.env.production 或生产环境变量配置
+PM2 / systemd / IIS 启动配置
+Nginx / IIS / 网关反向代理配置</pre>
+  <p class="warning">不能只备份 <code>registrations.sqlite</code>。如果存在 <code>-wal</code> 和 <code>-shm</code>，必须一并备份。</p>
+
+  <h2>3. 保留旧版本目录</h2>
+  <p>推荐使用版本目录和持久化目录分离的方式部署：</p>
+  <pre>/opt/hold-meeting/releases/v1.1.0
+/opt/hold-meeting/releases/v1.2.0
+/data/hold-meeting/registrations.sqlite
+/data/hold-meeting/uploads</pre>
+  <p>不要直接删除旧版本目录；确认 v1.2 稳定后再按公司保留策略清理。</p>
+
+  <h2>4. 获取 v1.2.0</h2>
+  <p>在新版本目录执行：</p>
+  <pre>git clone https://github.com/Kermit5L-bot/Hold-Meeting.git Hold-Meeting-v1.2.0
+cd Hold-Meeting-v1.2.0
+git fetch origin --tags
+git checkout v1.2.0</pre>
+  <p>核对版本：</p>
+  <pre>git log --oneline --decorate -1
+git status</pre>
+
+  <h2>5. 迁移持久化内容</h2>
+  <p>将生产环境变量指向原数据库绝对路径：</p>
+  <pre>REGISTRATIONS_DB_PATH=/data/hold-meeting/registrations.sqlite</pre>
+  <p>将原 <code>public/uploads/</code> 复制或挂载到新版本。确保应用账号对数据库目录和上传目录具有读写权限。</p>
+  <p class="warning">旧版 JSON 文件是首次 SQLite 迁移的数据来源。首次启动和验收完成前，不要删除原 <code>data/</code> 目录或其中的 JSON 文件。</p>
+
+  <h2>6. 核对环境变量</h2>
+  <pre>NODE_ENV=production
+ADMIN_SESSION_SECRET=沿用v1.1原值
+ADMIN_INITIAL_PASSWORD=仅首次初始化使用
+APP_BASE_URL=https://正式访问域名
+REGISTRATIONS_DB_PATH=/data/hold-meeting/registrations.sqlite</pre>
+  <ul>
+    <li><code>ADMIN_SESSION_SECRET</code> 不应在升级时重新生成。</li>
+    <li><code>APP_BASE_URL</code> 必须是用户实际访问域名，不能填写容器内部地址或仅内网可见地址。</li>
+    <li><code>REGISTRATIONS_DB_PATH</code> 必须继续指向原生产数据库，避免启动一个空库。</li>
+  </ul>
+
+  <h2>7. 安装、检查和构建</h2>
+  <p>Node.js 必须为 24 或以上：</p>
+  <pre>node -v
+npm -v
+npm ci
+npm test
+npm run typecheck
+npm run lint
+npm run build</pre>
+  <p>任一检查失败都应停止上线，不要跳过后继续启动。</p>
+
+  <h2>8. 启动 v1.2</h2>
+  <pre>pm2 start npm --name hold-meeting -- start -- -p 3000
+pm2 save
+pm2 logs hold-meeting --lines 100</pre>
+  <p>如果沿用已有 PM2 定义，先把工作目录切换到 v1.2，再执行：</p>
+  <pre>pm2 restart hold-meeting --update-env</pre>
+  <p class="warning">只能运行一个应用实例。不要配置 PM2 cluster，也不要同时保留 v1.1 和 v1.2 进程写同一个 SQLite 数据库。</p>
+
+  <h2>9. 反向代理检查</h2>
+  <p>代理到 Node 服务端口，并传递：</p>
+  <pre>Host
+X-Real-IP
+X-Forwarded-For
+X-Forwarded-Proto</pre>
+  <p>v1.2 使用客户端地址执行登录和公开接口限流。若代理没有正确传递客户端地址，集中报名时可能发生误限流。</p>
+
+  <h2>10. 数据迁移和兼容性</h2>
+  <p>v1.2 会把旧版会议、报名、配置、管理员和企微状态 JSON 数据按需导入统一 SQLite。首次访问后台、会议列表、报名或签到功能时，应重点观察日志。</p>
+  <ul>
+    <li>迁移异常时程序会保留旧文件，不应手工创建空文件覆盖。</li>
+    <li>管理员账号、模块授权和数据归属关系进入 SQLite 后，需逐项核对。</li>
+    <li>企微通知任务会持久化并在失败后重试，服务重启后仍会继续处理。</li>
+  </ul>
+
+  <h2>11. 上线验收</h2>
+  <ul>
+    <li>访问登录页，确认 HTTPS、静态资源和登录正常。</li>
+    <li>核对超级管理员及普通管理员账号、模块权限和数据范围。</li>
+    <li>核对原有会议、报名、签到、配置和历史导出数据。</li>
+    <li>创建测试会议、上传头图、生成报名和签到二维码。</li>
+    <li>完成一次报名、签到、现场补报名及企业微信通知。</li>
+    <li>确认 Excel/CSV 导出和导入模板可用。</li>
+    <li>确认无异常后清理测试数据，并再次执行备份。</li>
+  </ul>
+
+  <h2>12. 常见风险</h2>
+  <ul>
+    <li>误删或覆盖 <code>data/</code>、SQLite 文件或 <code>public/uploads/</code>，会造成数据或图片丢失。</li>
+    <li><code>REGISTRATIONS_DB_PATH</code> 改变会让系统连接到新空库，看起来像数据丢失。</li>
+    <li>Node 低于 24，<code>node:sqlite</code> 可能导致构建或启动失败。</li>
+    <li>多进程或多服务器共享 SQLite 会增加锁竞争和通知重复处理风险。</li>
+    <li>代理地址头配置错误会使限流识别异常。</li>
+    <li>应用账号没有目录写权限会导致报名、签到、迁移、通知和上传失败。</li>
+    <li>直接在线复制 SQLite 主文件可能得到不一致备份。</li>
+  </ul>
+
+  <h2>13. 回滚</h2>
+  <p>若 v1.2 验收失败：</p>
+  <pre>pm2 stop hold-meeting
+# 将进程工作目录恢复到保留的 v1.1.0 目录
+npm ci
+npm run build
+pm2 restart hold-meeting --update-env</pre>
+  <p>若 v1.2 已写入生产数据，回滚前必须判断数据库兼容性。最稳妥的方式是恢复升级前完整备份，然后再启动 v1.1。</p>
+  <p class="warning">回滚过程中禁止两个版本同时运行并写同一个 SQLite 数据库。</p>
+</body>
+</html>

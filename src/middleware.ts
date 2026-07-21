@@ -8,6 +8,8 @@ const protectedApiPrefixes = [
   "/api/uploads",
   "/api/import",
   "/api/settings",
+  "/api/admin",
+  "/api/auth/change-password",
 ];
 
 function isProtectedApi(pathname: string) {
@@ -19,10 +21,6 @@ export async function middleware(request: NextRequest) {
   const session = await verifySessionToken(request.cookies.get(authCookieName)?.value);
 
   if (pathname === "/login") {
-    if (session) {
-      return NextResponse.redirect(new URL("/admin", request.url));
-    }
-
     return NextResponse.next();
   }
 

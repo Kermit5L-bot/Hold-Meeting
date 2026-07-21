@@ -32,6 +32,7 @@ import type {
   MarketingMeetingRecord,
   OutreachMeeting,
   Registration,
+  AdminModule,
 } from "@/lib/types";
 import {
   currencyFormatter,
@@ -186,11 +187,21 @@ export function AdminHomeVisual({
   registrations,
   externalForums,
   marketingMeetings,
+  optionLabels,
+  accountId,
+  visibleModules,
 }: {
   outreachMeetings: OutreachMeeting[];
   registrations: Registration[];
   externalForums: ExternalForumRecord[];
   marketingMeetings: MarketingMeetingRecord[];
+  optionLabels: {
+    organizationType: Record<string, string>;
+    meetingOutput: Record<string, string>;
+    marketingMeetingType: Record<string, string>;
+  };
+  accountId: string;
+  visibleModules: AdminModule[];
 }) {
   const screenRef = useRef<HTMLDivElement>(null);
   const years = useMemo(
@@ -198,6 +209,7 @@ export function AdminHomeVisual({
     [externalForums, marketingMeetings, outreachMeetings],
   );
   const [year, setYear] = useState(defaultDashboardFilters.year);
+  const scopedHref = (path: string) => `${path}?accountId=${encodeURIComponent(accountId)}`;
 
   const stats = useMemo(
     () =>
@@ -210,8 +222,16 @@ export function AdminHomeVisual({
           ...defaultDashboardFilters,
           year,
         },
+        optionLabels,
       }),
-    [externalForums, marketingMeetings, outreachMeetings, registrations, year],
+    [
+      externalForums,
+      marketingMeetings,
+      optionLabels,
+      outreachMeetings,
+      registrations,
+      year,
+    ],
   );
 
   async function toggleFullscreen() {
@@ -290,16 +310,17 @@ export function AdminHomeVisual({
           </header>
 
           <div className="grid gap-6 2xl:grid-cols-[1.15fr_0.85fr]">
+            {visibleModules.includes("outreach_meetings") ? (
             <GlassPanel
               icon={<CalendarCheck aria-hidden="true" className="h-5 w-5" />}
               title="外联会议数据区域"
             >
               <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-5">
-                <MetricTile href="/admin/outreach-meetings" icon={CalendarCheck} label="外联会议数量" value={numberFormatter.format(stats.outreach.meetingCount)} />
-                <MetricTile href="/admin/outreach-meetings" icon={UsersRound} label="报名总人数" value={numberFormatter.format(stats.outreach.registrationCount)} />
-                <MetricTile href="/admin/outreach-meetings" icon={UserRoundCheck} label="签到总人数" value={numberFormatter.format(stats.outreach.checkinCount)} />
-                <MetricTile href="/admin/outreach-meetings" icon={Percent} label="到场率" value={percentFormatter.format(stats.outreach.attendanceRate)} />
-                <MetricTile href="/admin/outreach-meetings" icon={UserPlus} label="现场补报名" value={numberFormatter.format(stats.outreach.walkInCount)} />
+                <MetricTile href={scopedHref("/admin/outreach-meetings")} icon={CalendarCheck} label="外联会议数量" value={numberFormatter.format(stats.outreach.meetingCount)} />
+                <MetricTile href={scopedHref("/admin/outreach-meetings")} icon={UsersRound} label="报名总人数" value={numberFormatter.format(stats.outreach.registrationCount)} />
+                <MetricTile href={scopedHref("/admin/outreach-meetings")} icon={UserRoundCheck} label="签到总人数" value={numberFormatter.format(stats.outreach.checkinCount)} />
+                <MetricTile href={scopedHref("/admin/outreach-meetings")} icon={Percent} label="到场率" value={percentFormatter.format(stats.outreach.attendanceRate)} />
+                <MetricTile href={scopedHref("/admin/outreach-meetings")} icon={UserPlus} label="现场补报名" value={numberFormatter.format(stats.outreach.walkInCount)} />
               </div>
               <div className="mt-4 grid gap-4 xl:grid-cols-2">
                 <NeonRank title="单位类型排名" items={stats.outreach.unitTypeRanking} />
@@ -308,50 +329,53 @@ export function AdminHomeVisual({
                 <NeonRank title="单场签到排行" items={stats.outreach.checkinRanking} />
               </div>
             </GlassPanel>
+            ) : null}
 
+            {visibleModules.some((item) => item === "external_forums" || item === "marketing_meetings") ? (
             <GlassPanel
               icon={<Activity aria-hidden="true" className="h-5 w-5" />}
               title="会议运行趋势"
             >
               <div className="grid gap-4">
-                <DarkTrend title="外部会议月度趋势" items={stats.external.monthlyTrend} />
-                <DarkTrend title="营销中心月度趋势" items={stats.marketing.monthlyTrend} />
+                {visibleModules.includes("external_forums") ? <DarkTrend title="外部会议月度趋势" items={stats.external.monthlyTrend} /> : null}
+                {visibleModules.includes("marketing_meetings") ? <DarkTrend title="营销中心月度趋势" items={stats.marketing.monthlyTrend} /> : null}
               </div>
             </GlassPanel>
+            ) : null}
           </div>
 
           <div className="grid gap-6 xl:grid-cols-2">
-            <GlassPanel
+            {visibleModules.includes("external_forums") ? <GlassPanel
               icon={<Waypoints aria-hidden="true" className="h-5 w-5" />}
               title="外部会议&论坛数据区域"
             >
               <div className="grid gap-4 md:grid-cols-4">
-                <MetricTile href="/admin/external-forums" icon={Waypoints} label="参加会议场次" value={numberFormatter.format(stats.external.meetingCount)} />
-                <MetricTile href="/admin/external-forums" icon={WalletCards} label="费用总额" value={currencyFormatter.format(stats.external.costTotal)} />
-                <MetricTile href="/admin/external-forums" icon={Mic2} label="演讲场次" value={numberFormatter.format(stats.external.speechCount)} />
-                <MetricTile href="/admin/external-forums" icon={Handshake} label="赞助场次" value={numberFormatter.format(stats.external.sponsoredCount)} />
+                <MetricTile href={scopedHref("/admin/external-forums")} icon={Waypoints} label="参加会议场次" value={numberFormatter.format(stats.external.meetingCount)} />
+                <MetricTile href={scopedHref("/admin/external-forums")} icon={WalletCards} label="费用总额" value={currencyFormatter.format(stats.external.costTotal)} />
+                <MetricTile href={scopedHref("/admin/external-forums")} icon={Mic2} label="演讲场次" value={numberFormatter.format(stats.external.speechCount)} />
+                <MetricTile href={scopedHref("/admin/external-forums")} icon={Handshake} label="赞助场次" value={numberFormatter.format(stats.external.sponsoredCount)} />
               </div>
               <div className="mt-4 grid gap-4 lg:grid-cols-2">
                 <NeonRank title="部门参与次数排名" items={stats.external.businessUnitRanking} />
                 <NeonRank formatter={currencyFormatter.format} title="会议费用排名" items={stats.external.costRanking} />
               </div>
-            </GlassPanel>
+            </GlassPanel> : null}
 
-            <GlassPanel
+            {visibleModules.includes("marketing_meetings") ? <GlassPanel
               icon={<UsersRound aria-hidden="true" className="h-5 w-5" />}
               title="营销中心会议数据区域"
             >
               <div className="grid gap-4 md:grid-cols-4">
-                <MetricTile href="/admin/marketing-meetings" icon={ClipboardList} label="会议总次数" value={numberFormatter.format(stats.marketing.meetingCount)} />
-                <MetricTile href="/admin/marketing-meetings" icon={Monitor} label="线上会议次数" value={numberFormatter.format(stats.marketing.onlineCount)} />
-                <MetricTile href="/admin/marketing-meetings" icon={MapPinned} label="线下会议次数" value={numberFormatter.format(stats.marketing.offlineCount)} />
-                <MetricTile href="/admin/marketing-meetings" icon={UsersRound} label="参会人次数" value={numberFormatter.format(stats.marketing.attendeeCount)} />
+                <MetricTile href={scopedHref("/admin/marketing-meetings")} icon={ClipboardList} label="会议总次数" value={numberFormatter.format(stats.marketing.meetingCount)} />
+                <MetricTile href={scopedHref("/admin/marketing-meetings")} icon={Monitor} label="线上会议次数" value={numberFormatter.format(stats.marketing.onlineCount)} />
+                <MetricTile href={scopedHref("/admin/marketing-meetings")} icon={MapPinned} label="线下会议次数" value={numberFormatter.format(stats.marketing.offlineCount)} />
+                <MetricTile href={scopedHref("/admin/marketing-meetings")} icon={UsersRound} label="参会人次数" value={numberFormatter.format(stats.marketing.attendeeCount)} />
               </div>
               <div className="mt-4 grid gap-4 lg:grid-cols-2">
                 <NeonRank title="所属部门排名" items={stats.marketing.businessUnitRanking} />
                 <NeonRank title="会议类型分布" items={stats.marketing.typeDistribution} />
               </div>
-            </GlassPanel>
+            </GlassPanel> : null}
           </div>
         </div>
       </div>

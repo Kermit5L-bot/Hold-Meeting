@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Hold Meeting v1.2 运维部署需求</title>
+  <style>
+    body { font-family: "Microsoft YaHei", Arial, sans-serif; line-height: 1.65; color: #1f2933; }
+    h1 { font-size: 26px; color: #17365d; }
+    h2 { font-size: 18px; color: #1f4e79; border-bottom: 1px solid #d9e2ec; padding-bottom: 4px; margin-top: 24px; }
+    p { margin: 8px 0; }
+    ul { margin-top: 6px; }
+    code, pre { font-family: Consolas, "Courier New", monospace; }
+    pre { background: #f4f6f8; border: 1px solid #d9e2ec; padding: 10px 12px; white-space: pre-wrap; }
+    .meta { color: #52616b; }
+    .warning { color: #8a3b12; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Hold Meeting v1.2 运维部署需求</h1>
+  <p class="meta">适用项目：市场部会议信息收集管理系统</p>
+  <p class="meta">仓库：https://github.com/Kermit5L-bot/Hold-Meeting</p>
+  <p class="meta">版本：v1.2.0</p>
+
+  <h2>1. 运行环境</h2>
+  <ul>
+    <li>Node.js：必须使用 Node.js 24 或以上。</li>
+    <li>npm：使用 Node.js 随附版本。</li>
+    <li>操作系统：Linux 或 Windows Server，应用进程必须拥有数据目录和上传目录写权限。</li>
+    <li>部署方式：单台应用服务器、单个 Node 进程，前置 Nginx、IIS 或公司网关。</li>
+    <li class="warning">不要使用 PM2 cluster，也不要让多个应用实例同时写同一个 SQLite 文件。</li>
+  </ul>
+
+  <h2>2. 代码与构建</h2>
+  <pre>git clone https://github.com/Kermit5L-bot/Hold-Meeting.git
+cd Hold-Meeting
+git fetch origin --tags
+git checkout v1.2.0
+npm ci
+npm test
+npm run typecheck
+npm run lint
+npm run build</pre>
+  <p>只有全部命令成功后才能启动生产服务。不要在生产服务器使用 <code>npm install</code> 替代 <code>npm ci</code>。</p>
+
+  <h2>3. 环境变量</h2>
+  <p>生产环境必须配置：</p>
+  <pre>NODE_ENV=production
+ADMIN_SESSION_SECRET=至少32位随机字符串
+ADMIN_INITIAL_PASSWORD=首次部署至少12位临时管理员密码
+APP_BASE_URL=https://正式访问域名
+REGISTRATIONS_DB_PATH=/data/hold-meeting/registrations.sqlite</pre>
+  <ul>
+    <li><code>ADMIN_SESSION_SECRET</code> 必须长期保存，升级时沿用原值。程序也兼容 <code>AUTH_SECRET</code>，但建议统一使用前者。</li>
+    <li><code>ADMIN_INITIAL_PASSWORD</code> 仅在数据库中没有超级管理员时生效，不会重置现有账号密码。</li>
+    <li><code>APP_BASE_URL</code> 必须是用户实际访问的 HTTPS 域名。程序兼容 <code>NEXT_PUBLIC_APP_BASE_URL</code>，但生产环境建议统一使用前者。</li>
+    <li><code>REGISTRATIONS_DB_PATH</code> 建议使用服务器数据盘绝对路径，并在每次发布时保持不变。</li>
+  </ul>
+
+  <h2>4. 数据库与持久化</h2>
+  <p>v1.2 的会议、报名、签到、配置、管理员账号、权限和企业微信通知任务统一存储在 SQLite：</p>
+  <pre>/data/hold-meeting/registrations.sqlite
+/data/hold-meeting/registrations.sqlite-wal
+/data/hold-meeting/registrations.sqlite-shm</pre>
+  <p>旧版本 <code>data/</code> 中的 JSON 数据会在首次访问对应功能时自动迁移。迁移前必须保留整个旧 <code>data/</code> 目录，确认数据完整后再制定旧文件归档策略。</p>
+  <p class="warning">备份建议停服后复制整个数据目录。在线备份不能只复制 SQLite 主文件，必须保证主文件、WAL 和 SHM 来自同一时点。</p>
+
+  <h2>5. 文件上传</h2>
+  <p>会议头图目录：</p>
+  <pre>public/uploads/outreach-covers/</pre>
+  <p>该目录必须持久化并允许应用进程写入。发布新版本时不得覆盖或清空。系统会清理超过 24 小时且未被会议引用的系统生成头图。</p>
+
+  <h2>6. 启动与进程管理</h2>
+  <p>直接启动：</p>
+  <pre>npm run start -- -p 3000</pre>
+  <p>使用 PM2：</p>
+  <pre>pm2 start npm --name hold-meeting -- start -- -p 3000
+pm2 save</pre>
+  <p>已有服务升级后：</p>
+  <pre>pm2 restart hold-meeting
+pm2 logs hold-meeting --lines 100</pre>
+
+  <h2>7. 反向代理</h2>
+  <p>反向代理到 Node 端口，并保留以下请求头：</p>
+  <pre>Host
+X-Real-IP
+X-Forwarded-For
+X-Forwarded-Proto</pre>
+  <p>真实客户端地址用于登录和公开接口限流。代理层配置错误会导致所有用户被识别为同一个地址，集中报名时可能误触发限流。</p>
+
+  <h2>8. v1.2 重点能力</h2>
+  <ul>
+    <li>超级管理员可管理账号、模块权限和账号级数据范围。</li>
+    <li>登录接口和公开报名、签到接口增加限流与请求校验。</li>
+    <li>业务数据、管理员账号、配置和通知任务统一迁移到 SQLite。</li>
+    <li>企业微信通知先入库再异步发送，失败后按策略重试，应用重启后继续处理。</li>
+    <li>报名、签到和会议台账导入导出流程加强了校验。</li>
+  </ul>
+
+  <h2>9. 上线验收</h2>
+  <ul>
+    <li>访问 <code>/login</code>，确认 HTTPS、域名和页面加载正常。</li>
+    <li>超级管理员登录，检查账号、权限、数据范围和基础配置。</li>
+    <li>使用普通管理员验证未授权模块不可访问，且只能查看授权数据。</li>
+    <li>创建测试会议并上传头图，确认图片可访问。</li>
+    <li>完成一次报名、签到和现场补报名，确认后台数据及企微通知。</li>
+    <li>检查导入、Excel/CSV 导出和企业微信失败任务重试入口。</li>
+    <li>检查日志中无数据库权限、迁移、通知或反向代理地址异常。</li>
+    <li>验收完成后清理测试业务数据。</li>
+  </ul>
+
+  <h2>10. 备份与监控</h2>
+  <ul>
+    <li>至少每日备份数据目录和上传目录，活动前增加一次人工备份。</li>
+    <li>监控 Node 进程、磁盘空间、SQLite 文件增长、5xx、登录失败和企业微信通知失败。</li>
+    <li>建议保留最近 7 至 30 天备份，并定期做恢复演练。</li>
+  </ul>
+
+  <h2>11. 当前部署边界</h2>
+  <p>SQLite 可以支撑当前几百人集中报名的单机部署，但它不是多机高可用数据库。若需要多实例、跨机容灾或并发量继续扩大，应迁移到 PostgreSQL、MySQL 或 SQL Server，并使用支持多消费者协调的独立任务队列。</p>
+</body>
+</html>

@@ -1,7 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { readExternalForums } from "@/lib/external-forums-store";
 import { readMarketingMeetings } from "@/lib/marketing-meetings-store";
 import { readOutreachMeetings } from "@/lib/outreach-meetings-store";
 import { normalizePhone, readRegistrations } from "@/lib/registrations-store";
+import { readActiveSettingsOptions } from "@/lib/settings-options";
+import type { SettingsCategory } from "@/lib/types";
 import type {
   AttendancePurpose,
   CheckinMethod,
@@ -64,7 +67,7 @@ const templates: Record<ImportKind, string[]> = {
   ],
   "outreach-registrations": [
     "报名历史导入编号",
-    "会议历史导入编号",
+    "会议编号",
     "姓名",
     "单位类型",
     "其他单位类型",
@@ -117,12 +120,20 @@ const templates: Record<ImportKind, string[]> = {
   ],
 };
 
+const headerAliases: Partial<
+  Record<ImportKind, Record<string, readonly string[]>>
+> = {
+  "outreach-registrations": {
+    会议编号: ["会议编号", "会议历史导入编号"],
+  },
+};
+
 const sampleRows: Record<ImportKind, string[]> = {
   "outreach-meetings": [
     "outreach-history-001",
     "华东区域客户交流会",
-    "2025/05/18 09:30",
-    "2025/05/18 16:30",
+    "2025-05-18 09:30",
+    "2025-05-18 16:30",
     "线下",
     "上海会议中心",
     "华东",
@@ -143,9 +154,9 @@ const sampleRows: Record<ImportKind, string[]> = {
     "是",
     "已报名",
     "会前报名",
-    "2025/05/10 10:00",
+    "2025-05-10 10:00",
     "已签到",
-    "2025/05/18 09:40",
+    "2025-05-18 09:40",
     "微信扫码",
     "否",
     "历史导入示例",
@@ -296,13 +307,28 @@ const marketingTypeMap: Record<string, InternalMeetingType> = {
   其他: "other",
 };
 
+async function withActiveSettings<T extends string>(
+  category: SettingsCategory,
+  fallbackMap: Record<string, T>,
+) {
+  const options = await readActiveSettingsOptions(category);
+  const map: Record<string, T> = { ...fallbackMap };
+
+  for (const option of options) {
+    map[option.label] = option.value as T;
+    map[option.value] = option.value as T;
+  }
+
+  return map;
+}
+
 function escapeCsvCell(value: string) {
   return `"${value.replaceAll("\"", "\"\"")}"`;
 }
 
 export function buildImportTemplate(kind: ImportKind) {
   const rows = [templates[kind], sampleRows[kind]];
-  return `\uFEFF${rows.map((row) => row.map(escapeCsvCell).join(",")).join("\n")}`;
+  return `\uFEFF${rows.map((row) => row.map(escapeCsvCell).join(",")).join("\r\n")}\r\n`;
 }
 
 function parseCsv(text: string) {
@@ -346,11 +372,10 @@ function parseCsv(text: string) {
     rows.push(row);
   }
 
-  return rows;
+  return { rows, hasUnclosedQuote: inQuotes };
 }
 
-function csvToObjects(text: string): CsvRow[] {
-  const rows = parseCsv(text);
+function csvToObjects(rows: string[][]): CsvRow[] {
   const headers = rows[0] ?? [];
 
   return rows.slice(1).map((row) =>
@@ -450,27 +475,55 @@ function parseDateTime(value: string, label: string, errors: string[]) {
     return new Date().toISOString();
   }
 
-  const normalized = value
-    .replaceAll("/", "-")
-    .replace(" ", "T")
-    .replace(/T(\d{1,2}):(\d{2})$/, "T$1:$2:00+08:00")
-    .replace(/T(\d{1,2}):(\d{2}):(\d{2})$/, "T$1:$2:$3+08:00");
-  const date = new Date(normalized);
+  const trimmed = value.trim();
+  const localMatch = trimmed.match(
+    /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/,
+  );
 
-  if (Number.isNaN(date.getTime())) {
-    errors.push(`${label}格式无效：${value}`);
-    return new Date().toISOString();
+  if (localMatch) {
+    const [, yearText, monthText, dayText, hourText = "0", minuteText = "0", secondText = "0"] =
+      localMatch;
+    const year = Number(yearText);
+    const month = Number(monthText);
+    const day = Number(dayText);
+    const hour = Number(hourText);
+    const minute = Number(minuteText);
+    const second = Number(secondText);
+    const normalized = `${yearText}-${monthText.padStart(2, "0")}-${dayText.padStart(2, "0")}T${hourText.padStart(2, "0")}:${minuteText.padStart(2, "0")}:${secondText.padStart(2, "0")}+08:00`;
+    const date = new Date(normalized);
+    const localDate = new Date(date.getTime() + 8 * 60 * 60 * 1000);
+    const isValid =
+      month >= 1 &&
+      month <= 12 &&
+      day >= 1 &&
+      day <= 31 &&
+      hour >= 0 &&
+      hour <= 23 &&
+      minute >= 0 &&
+      minute <= 59 &&
+      second >= 0 &&
+      second <= 59 &&
+      !Number.isNaN(date.getTime()) &&
+      localDate.getUTCFullYear() === year &&
+      localDate.getUTCMonth() + 1 === month &&
+      localDate.getUTCDate() === day &&
+      localDate.getUTCHours() === hour &&
+      localDate.getUTCMinutes() === minute &&
+      localDate.getUTCSeconds() === second;
+
+    if (isValid) {
+      return normalized;
+    }
+  } else if (/([+-]\d{2}:\d{2}|Z)$/i.test(trimmed)) {
+    const date = new Date(trimmed);
+
+    if (!Number.isNaN(date.getTime())) {
+      return trimmed;
+    }
   }
 
-  if (/([+-]\d{2}:\d{2}|Z)$/.test(normalized)) {
-    return normalized;
-  }
-
-  if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(normalized)) {
-    return `${normalized}T00:00:00+08:00`;
-  }
-
-  return normalized;
+  errors.push(`${label}格式无效：${value}，请使用 YYYY-MM-DD HH:mm`);
+  return new Date().toISOString();
 }
 
 function splitList(value: string) {
@@ -481,13 +534,78 @@ function splitList(value: string) {
 }
 
 function id(prefix: string) {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random()
-    .toString(36)
-    .slice(2, 8)}`;
+  return `${prefix}-${randomUUID()}`;
 }
 
-function getRows(text: string, errors: ImportIssue[]) {
-  const rows = csvToObjects(text);
+function getRows(kind: ImportKind, text: string, errors: ImportIssue[]) {
+  const parsed = parseCsv(text);
+  const sourceHeaders = (parsed.rows[0] ?? []).map((header) => header.trim());
+
+  if (parsed.hasUnclosedQuote) {
+    errors.push({ rowNumber: 1, message: "CSV 存在未闭合的双引号" });
+    return [];
+  }
+
+  if (sourceHeaders.length === 0 || sourceHeaders.every((header) => !header)) {
+    errors.push({ rowNumber: 1, message: "CSV 缺少表头" });
+    return [];
+  }
+
+  const expectedHeaders = templates[kind];
+  const aliases = headerAliases[kind] ?? {};
+  const headers = sourceHeaders.map((header) => {
+    const canonicalHeader = expectedHeaders.find((expectedHeader) =>
+      (aliases[expectedHeader] ?? [expectedHeader]).includes(header),
+    );
+    return canonicalHeader ?? header;
+  });
+  const duplicateHeaders = headers.filter(
+    (header, index) => header && headers.indexOf(header) !== index,
+  );
+  const missingHeaders = expectedHeaders.filter(
+    (header) => !headers.includes(header),
+  );
+
+  if (duplicateHeaders.length > 0) {
+    errors.push({
+      rowNumber: 1,
+      message: `表头重复：${[...new Set(duplicateHeaders)].join("、")}`,
+    });
+  }
+
+  if (missingHeaders.length > 0) {
+    errors.push({
+      rowNumber: 1,
+      message: `缺少模板列：${missingHeaders.join("、")}，请重新下载模板并完整保留表头`,
+    });
+  }
+
+  if (duplicateHeaders.length > 0 || missingHeaders.length > 0) {
+    return [];
+  }
+
+  const invalidColumnRows = parsed.rows
+    .slice(1)
+    .map((row, index) => ({ row, rowNumber: index + 2 }))
+    .filter(({ row }) => row.length !== headers.length);
+
+  if (invalidColumnRows.length > 0) {
+    invalidColumnRows.slice(0, 20).forEach(({ row, rowNumber }) => {
+      errors.push({
+        rowNumber,
+        message: `列数不正确：应为 ${headers.length} 列，实际为 ${row.length} 列，请检查未加引号的逗号或缺失单元格`,
+      });
+    });
+    if (invalidColumnRows.length > 20) {
+      errors.push({
+        rowNumber: 0,
+        message: `另有 ${invalidColumnRows.length - 20} 行列数不正确`,
+      });
+    }
+    return [];
+  }
+
+  const rows = csvToObjects([headers, ...parsed.rows.slice(1)]);
 
   if (rows.length > maxImportRows) {
     errors.push({
@@ -513,33 +631,33 @@ function previewFromIssues(
   };
 }
 
-export async function previewImport(kind: ImportKind, text: string) {
-  const built = await buildRecords(kind, text);
+export async function previewImport(kind: ImportKind, text: string, ownerUserId = "admin-super-001") {
+  const built = await buildRecords(kind, text, ownerUserId);
   return previewFromIssues(built.totalRows, built.errorRows, built.duplicateRows);
 }
 
-export async function buildRecords(kind: ImportKind, text: string) {
+export async function buildRecords(kind: ImportKind, text: string, ownerUserId = "admin-super-001") {
   if (kind === "outreach-meetings") {
-    return buildOutreachMeetings(text);
+    return buildOutreachMeetings(text, ownerUserId);
   }
 
   if (kind === "outreach-registrations") {
-    return buildOutreachRegistrations(text);
+    return buildOutreachRegistrations(text, ownerUserId);
   }
 
   if (kind === "external-forums") {
-    return buildExternalForums(text);
+    return buildExternalForums(text, ownerUserId);
   }
 
-  return buildMarketingMeetings(text);
+  return buildMarketingMeetings(text, ownerUserId);
 }
 
-async function buildOutreachMeetings(text: string) {
+async function buildOutreachMeetings(text: string, ownerUserId: string) {
   const errorRows: ImportIssue[] = [];
   const duplicateRows: ImportIssue[] = [];
-  const rows = getRows(text, errorRows);
+  const rows = getRows("outreach-meetings", text, errorRows);
   const existing = await readOutreachMeetings();
-  const existingKeys = new Set(existing.map((item) => item.importKey).filter(Boolean));
+  const existingKeys = new Set(existing.filter((item) => item.ownerUserId === ownerUserId).map((item) => item.importKey).filter(Boolean));
   const seenKeys = new Set<string>();
   const batchId = id("import-batch");
   const timestamp = new Date().toISOString();
@@ -550,6 +668,7 @@ async function buildOutreachMeetings(text: string) {
     const errors: string[] = [];
     const importKey = required(row, "历史导入编号", errors);
     const title = required(row, "会议主题", errors);
+    const dateErrorCount = errors.length;
     const startTime = parseDateTime(required(row, "会议开始时间", errors), "会议开始时间", errors);
     const endTimeValue = optional(row, "会议结束时间");
     const endTime = endTimeValue
@@ -557,7 +676,20 @@ async function buildOutreachMeetings(text: string) {
       : undefined;
     const locationType = parseMapped(required(row, "地点类型", errors), locationTypeMap, "地点类型", errors);
     const location = required(row, "会议地点", errors);
-    const status = parseMapped(optional(row, "会议状态"), meetingStatusMap, "会议状态", errors, "ended");
+    const status = parseMapped(
+      required(row, "会议状态", errors),
+      meetingStatusMap,
+      "会议状态",
+      errors,
+    );
+
+    if (
+      errors.length === dateErrorCount &&
+      endTime &&
+      new Date(endTime).getTime() < new Date(startTime).getTime()
+    ) {
+      errors.push("会议结束时间不能早于会议开始时间");
+    }
 
     if (existingKeys.has(importKey) || seenKeys.has(importKey)) {
       duplicateRows.push({ rowNumber, importKey, message: "历史导入编号重复" });
@@ -572,6 +704,7 @@ async function buildOutreachMeetings(text: string) {
     seenKeys.add(importKey);
     records.push({
       id: id("outreach-import"),
+      ownerUserId,
       title,
       type: "outreach",
       startTime,
@@ -606,16 +739,22 @@ async function buildOutreachMeetings(text: string) {
   return { totalRows: rows.length, errorRows, duplicateRows, records };
 }
 
-async function buildOutreachRegistrations(text: string) {
+async function buildOutreachRegistrations(text: string, ownerUserId: string) {
   const errorRows: ImportIssue[] = [];
   const duplicateRows: ImportIssue[] = [];
-  const rows = getRows(text, errorRows);
-  const meetings = await readOutreachMeetings();
-  const meetingByImportKey = new Map(
-    meetings
-      .filter((meeting) => meeting.importKey)
-      .map((meeting) => [meeting.importKey as string, meeting]),
+  const rows = getRows("outreach-registrations", text, errorRows);
+  const activeOrganizationTypeMap = await withActiveSettings(
+    "organizationType",
+    organizationTypeMap,
   );
+  const meetings = await readOutreachMeetings();
+  const meetingByReference = new Map<string, OutreachMeeting>();
+  meetings.filter((meeting) => meeting.ownerUserId === ownerUserId).forEach((meeting) => {
+    meetingByReference.set(meeting.id, meeting);
+    if (meeting.importKey) {
+      meetingByReference.set(meeting.importKey, meeting);
+    }
+  });
   const registrations = await readRegistrations();
   const existingKeys = new Set(
     registrations.map((item) => `${item.meetingId}:${normalizePhone(item.phone)}`),
@@ -628,46 +767,86 @@ async function buildOutreachRegistrations(text: string) {
   rows.forEach((row, index) => {
     const rowNumber = index + 2;
     const errors: string[] = [];
-    const meetingImportKey = required(row, "会议历史导入编号", errors);
-    const meeting = meetingByImportKey.get(meetingImportKey);
+    const meetingReference = required(row, "会议编号", errors);
+    const meeting = meetingByReference.get(meetingReference);
     const name = required(row, "姓名", errors);
-    const organizationType = parseMapped(required(row, "单位类型", errors), organizationTypeMap, "单位类型", errors, "other");
+    const organizationType = parseMapped(
+      required(row, "单位类型", errors),
+      activeOrganizationTypeMap,
+      "单位类型",
+      errors,
+      "other",
+    );
     const organizationName = required(row, "单位名称", errors);
     const phone = normalizePhone(required(row, "手机号", errors));
-    const meal = parseMapped(optional(row, "是否用餐"), mealMap, "是否用餐", errors, "no");
-    const status = parseMapped(optional(row, "报名状态"), registrationStatusMap, "报名状态", errors, "registered");
-    const source = parseMapped(optional(row, "报名来源"), registrationSourceMap, "报名来源", errors, "admin_entry");
-    const checkinStatus = parseMapped(optional(row, "签到状态"), checkinStatusMap, "签到状态", errors, "not_checked_in");
+    const meal = parseMapped(
+      required(row, "是否用餐", errors),
+      mealMap,
+      "是否用餐",
+      errors,
+    );
+    const status = parseMapped(
+      required(row, "报名状态", errors),
+      registrationStatusMap,
+      "报名状态",
+      errors,
+    );
+    const source = parseMapped(
+      required(row, "报名来源", errors),
+      registrationSourceMap,
+      "报名来源",
+      errors,
+    );
+    const checkinStatus = parseMapped(
+      required(row, "签到状态", errors),
+      checkinStatusMap,
+      "签到状态",
+      errors,
+    );
     const checkinMethodValue = optional(row, "签到方式");
     const checkinAtValue = optional(row, "签到时间");
-    const registeredAtValue = optional(row, "报名时间");
-    const isWalkIn = parseBool(optional(row, "是否现场补报名"), "是否现场补报名", errors, source === "walk_in");
-    const importKey = optional(row, "报名历史导入编号") || `${meetingImportKey}-${phone}`;
-    const registeredAt = registeredAtValue
-      ? parseDateTime(registeredAtValue, "报名时间", errors)
-      : timestamp;
+    const isWalkIn = parseBool(
+      required(row, "是否现场补报名", errors),
+      "是否现场补报名",
+      errors,
+    );
+    const importKey = optional(row, "报名历史导入编号") || `${meetingReference}-${phone}`;
+    const registeredAt = parseDateTime(
+      required(row, "报名时间", errors),
+      "报名时间",
+      errors,
+    );
     const checkinAt =
       checkinStatus === "checked_in"
-        ? checkinAtValue
-          ? parseDateTime(checkinAtValue, "签到时间", errors)
-          : timestamp
+        ? parseDateTime(
+            required(row, "签到时间", errors),
+            "签到时间",
+            errors,
+          )
         : undefined;
     const checkinMethod =
-      checkinStatus === "checked_in" && checkinMethodValue
-        ? parseMapped(checkinMethodValue, checkinMethodMap, "签到方式", errors, "wechat_scan")
-        : checkinStatus === "checked_in"
-          ? "wechat_scan"
-          : undefined;
+      checkinStatus === "checked_in"
+        ? parseMapped(
+            required(row, "签到方式", errors),
+            checkinMethodMap,
+            "签到方式",
+            errors,
+          )
+        : undefined;
+
+    if (checkinStatus === "not_checked_in" && (checkinAtValue || checkinMethodValue)) {
+      errors.push("未签到记录不应填写签到时间或签到方式");
+    }
 
     if (!meeting) {
-      errors.push("会议历史导入编号未匹配到外联会议");
+      errors.push("会议编号未匹配到外联会议，请填写系统会议编号或历史导入编号");
     }
 
     if (phone.length !== 11) {
       errors.push("手机号需填写 11 位数字");
     }
 
-    const duplicateKey = `${meeting?.id ?? meetingImportKey}:${phone}`;
+    const duplicateKey = `${meeting?.id ?? meetingReference}:${phone}`;
 
     if (existingKeys.has(duplicateKey) || seenKeys.has(duplicateKey)) {
       duplicateRows.push({ rowNumber, importKey, message: "同一会议下手机号重复" });
@@ -711,12 +890,18 @@ async function buildOutreachRegistrations(text: string) {
   return { totalRows: rows.length, errorRows, duplicateRows, records };
 }
 
-async function buildExternalForums(text: string) {
+async function buildExternalForums(text: string, ownerUserId: string) {
   const errorRows: ImportIssue[] = [];
   const duplicateRows: ImportIssue[] = [];
-  const rows = getRows(text, errorRows);
+  const rows = getRows("external-forums", text, errorRows);
+  const [activeCostTypeMap, activePurposeMap, activeOutputMap] =
+    await Promise.all([
+      withActiveSettings("costType", costTypeMap),
+      withActiveSettings("attendancePurpose", purposeMap),
+      withActiveSettings("meetingOutput", outputMap),
+    ]);
   const existing = await readExternalForums();
-  const existingKeys = new Set(existing.map((item) => item.importKey).filter(Boolean));
+  const existingKeys = new Set(existing.filter((item) => item.ownerUserId === ownerUserId).map((item) => item.importKey).filter(Boolean));
   const seenKeys = new Set<string>();
   const batchId = id("import-batch");
   const timestamp = new Date().toISOString();
@@ -733,24 +918,28 @@ async function buildExternalForums(text: string) {
     const attendees = splitList(required(row, "参会人", errors));
     const businessUnit = required(row, "所属部门", errors);
     const hasSpeech = parseBool(required(row, "是否演讲", errors), "是否演讲", errors);
-    const sponsored = parseBool(optional(row, "是否赞助"), "是否赞助", errors);
+    const sponsored = parseBool(
+      required(row, "是否赞助", errors),
+      "是否赞助",
+      errors,
+    );
     const costValue = optional(row, "费用");
     const cost = costValue ? Number(costValue) : undefined;
     const costType = parseOptionalMapped(
       optional(row, "费用类型"),
-      costTypeMap,
+      activeCostTypeMap,
       "费用类型",
       errors,
     );
     const purposes = parseMappedList(
       optional(row, "参会目的"),
-      purposeMap,
+      activePurposeMap,
       "参会目的",
       errors,
     );
     const outputs = parseMappedList(
       optional(row, "会议产出"),
-      outputMap,
+      activeOutputMap,
       "会议产出",
       errors,
     );
@@ -784,6 +973,7 @@ async function buildExternalForums(text: string) {
     seenKeys.add(importKey);
     records.push({
       id: id("forum-import"),
+      ownerUserId,
       title,
       organizer,
       meetingTime,
@@ -812,12 +1002,16 @@ async function buildExternalForums(text: string) {
   return { totalRows: rows.length, errorRows, duplicateRows, records };
 }
 
-async function buildMarketingMeetings(text: string) {
+async function buildMarketingMeetings(text: string, ownerUserId: string) {
   const errorRows: ImportIssue[] = [];
   const duplicateRows: ImportIssue[] = [];
-  const rows = getRows(text, errorRows);
+  const rows = getRows("marketing-meetings", text, errorRows);
+  const activeMarketingTypeMap = await withActiveSettings(
+    "marketingMeetingType",
+    marketingTypeMap,
+  );
   const existing = await readMarketingMeetings();
-  const existingKeys = new Set(existing.map((item) => item.importKey).filter(Boolean));
+  const existingKeys = new Set(existing.filter((item) => item.ownerUserId === ownerUserId).map((item) => item.importKey).filter(Boolean));
   const seenKeys = new Set<string>();
   const batchId = id("import-batch");
   const timestamp = new Date().toISOString();
@@ -836,7 +1030,7 @@ async function buildMarketingMeetings(text: string) {
     const offlineAddress = optional(row, "线下会议地址");
     const meetingType = parseOptionalMapped(
       optional(row, "会议类型"),
-      marketingTypeMap,
+      activeMarketingTypeMap,
       "会议类型",
       errors,
     );
@@ -862,6 +1056,7 @@ async function buildMarketingMeetings(text: string) {
     seenKeys.add(importKey);
     records.push({
       id: id("marketing-import"),
+      ownerUserId,
       title,
       businessUnit,
       attendees,

@@ -9,6 +9,7 @@ data/admin-users.json
 data/wecom-checkin-summary-state.json
 data/*.sqlite
 data/*.sqlite-*
+data/backups/
 public/uploads/*
 !public/uploads/.gitkeep
 docs/Hold-Meeting-v1.0-运维部署需求.doc

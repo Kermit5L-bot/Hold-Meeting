@@ -3,9 +3,11 @@ import { listRegistrationsByMeeting } from "@/lib/registrations-store";
 import {
   buildWecomMeetingStats,
   notifyWecomCheckinSummary,
+  type WecomMeetingStats,
 } from "@/lib/wecom-notifier";
 import {
   readWecomCheckinSummaryState,
+  type WecomCheckinSummaryState,
   writeWecomCheckinSummaryState,
 } from "@/lib/wecom-checkin-summary-state";
 import type { OutreachMeeting } from "@/lib/types";
@@ -16,11 +18,13 @@ const windowAfterStartMs = 30 * 60 * 1000;
 
 declare global {
   var __wecomCheckinSummaryJobStarted: boolean | undefined;
+  var __wecomCheckinSummaryJobRunning: boolean | undefined;
 }
 
 function isEligibleMeeting(meeting: OutreachMeeting) {
   return Boolean(
-    meeting.enableWecomNotify &&
+    meeting.status === "published" &&
+      meeting.enableWecomNotify &&
       meeting.wecomWebhook?.trim() &&
       meeting.enableWecomCheckinSummaryNotify,
   );
@@ -55,6 +59,20 @@ function hasReachedInterval(lastSentAt: string | undefined, intervalMinutes: num
   return now.getTime() - lastSentMs >= intervalMinutes * 60 * 1000;
 }
 
+export function hasCompletedCheckinSummary(
+  state: WecomCheckinSummaryState | null,
+  stats: WecomMeetingStats,
+) {
+  if (state?.completedAt) return true;
+  return Boolean(
+    state &&
+      stats.registrationCount > 0 &&
+      stats.checkinCount >= stats.registrationCount &&
+      state.lastRegistrationCount === stats.registrationCount &&
+      state.lastCheckinCount === stats.checkinCount,
+  );
+}
+
 async function maybeSendMeetingSummary(meeting: OutreachMeeting, now: Date) {
   if (!isEligibleMeeting(meeting) || !isInsideSummaryWindow(meeting, now)) {
     return;
@@ -68,6 +86,16 @@ async function maybeSendMeetingSummary(meeting: OutreachMeeting, now: Date) {
   }
 
   const state = await readWecomCheckinSummaryState(meeting.id);
+
+  if (hasCompletedCheckinSummary(state, stats)) {
+    if (state && !state.completedAt) {
+      await writeWecomCheckinSummaryState({
+        ...state,
+        completedAt: state.lastSentAt,
+      });
+    }
+    return;
+  }
 
   if (!hasReachedInterval(state?.lastSentAt, meeting.wecomCheckinSummaryIntervalMinutes, now)) {
     return;
@@ -97,6 +125,10 @@ async function maybeSendMeetingSummary(meeting: OutreachMeeting, now: Date) {
     lastCheckinCount: stats.checkinCount,
     lastRegistrationCount: stats.registrationCount,
     lastNotCheckedInCount: stats.notCheckedInCount,
+    completedAt:
+      stats.registrationCount > 0 && stats.checkinCount >= stats.registrationCount
+        ? now.toISOString()
+        : undefined,
   });
 }
 
@@ -115,6 +147,19 @@ export async function runWecomCheckinSummaryJobOnce(now = new Date()) {
   }
 }
 
+async function runScheduledJob() {
+  if (globalThis.__wecomCheckinSummaryJobRunning) {
+    return;
+  }
+
+  globalThis.__wecomCheckinSummaryJobRunning = true;
+  try {
+    await runWecomCheckinSummaryJobOnce();
+  } finally {
+    globalThis.__wecomCheckinSummaryJobRunning = false;
+  }
+}
+
 export function startWecomCheckinSummaryJob() {
   if (globalThis.__wecomCheckinSummaryJobStarted) {
     return;
@@ -122,12 +167,12 @@ export function startWecomCheckinSummaryJob() {
 
   globalThis.__wecomCheckinSummaryJobStarted = true;
 
-  void runWecomCheckinSummaryJobOnce().catch((error) => {
+  void runScheduledJob().catch((error) => {
     console.error("企业微信签到进度汇总任务启动执行失败", error);
   });
 
   const timer = setInterval(() => {
-    void runWecomCheckinSummaryJobOnce().catch((error) => {
+    void runScheduledJob().catch((error) => {
       console.error("企业微信签到进度汇总任务执行失败", error);
     });
   }, scanIntervalMs);

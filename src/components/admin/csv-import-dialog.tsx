@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Download, Upload, X } from "lucide-react";
+import type { PublicAdminUser } from "@/lib/admin-users";
 
 interface ImportIssue {
   rowNumber: number;
@@ -25,6 +26,8 @@ export function CsvImportDialog({
   previewUrl,
   confirmUrl,
   triggerLabel = "导入数据",
+  accountId,
+  ownerOptions = [],
 }: {
   title: string;
   description: string;
@@ -32,6 +35,8 @@ export function CsvImportDialog({
   previewUrl: string;
   confirmUrl: string;
   triggerLabel?: string;
+  accountId?: string;
+  ownerOptions?: PublicAdminUser[];
 }) {
   const [open, setOpen] = useState(false);
   const [csvText, setCsvText] = useState("");
@@ -39,6 +44,7 @@ export function CsvImportDialog({
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [ownerUserId, setOwnerUserId] = useState("");
 
   async function readFile(file: File) {
     setError("");
@@ -53,20 +59,31 @@ export function CsvImportDialog({
 
     if (file.size > 2 * 1024 * 1024) {
       setCsvText("");
-      setError("单个 CSV 文件建议不超过 2MB。");
+      setError("单个 CSV 文件不能超过 2MB。");
       return;
     }
 
-    setCsvText(await file.text());
+    const text = await file.text();
+
+    if (text.includes("\uFFFD")) {
+      setCsvText("");
+      setError("文件编码无法识别，请在 Excel 或 WPS 中另存为 CSV UTF-8 后重试。");
+      return;
+    }
+
+    setCsvText(text);
   }
 
   async function postCsv(url: string) {
-    const response = await fetch(url, {
+    if (accountId === "all" && !ownerUserId) throw new Error("请选择数据归属账号。");
+    const separator = url.includes("?") ? "&" : "?";
+    const scopedUrl = accountId ? `${url}${separator}accountId=${encodeURIComponent(accountId)}` : url;
+    const response = await fetch(scopedUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ csv: csvText }),
+      body: JSON.stringify({ csv: csvText, ownerUserId: ownerUserId || undefined }),
     });
     const data = (await response.json().catch(() => null)) as
       | (ImportPreview & { message?: string })
@@ -162,6 +179,7 @@ export function CsvImportDialog({
             </div>
 
             <div className="grid gap-4 p-5">
+              {accountId === "all" ? <label className="grid gap-1 text-sm font-medium text-ink">数据归属账号<select autoComplete="off" className="h-10 rounded-md border border-slate-300 bg-white px-3" name="importOwnerUserId" onChange={(event) => setOwnerUserId(event.target.value)} required value={ownerUserId}><option value="">请选择</option>{ownerOptions.filter((item) => item.status !== "deleted").map((item) => <option key={item.id} value={item.id}>{item.displayName}（{item.username}）</option>)}</select></label> : null}
               <div className="flex flex-wrap items-center gap-3">
                 <Link
                   className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50"
@@ -194,7 +212,10 @@ export function CsvImportDialog({
               ) : null}
 
               {error ? (
-                <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                <p
+                  className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+                  role="alert"
+                >
                   {error}
                 </p>
               ) : null}

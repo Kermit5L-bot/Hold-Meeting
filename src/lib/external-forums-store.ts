@@ -1,5 +1,10 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
+import {
+  mutateJsonCollection,
+  readJsonCollection,
+  type JsonCollectionConfig,
+} from "@/lib/sqlite-json-collection";
 import type {
   ExternalForumFormValues,
   ExternalForumRecord,
@@ -7,10 +12,12 @@ import type {
 
 const dataDir = path.join(process.cwd(), "data");
 const externalForumsPath = path.join(dataDir, "external-forums.json");
+const legacyOwnerUserId = "admin-super-001";
 
 const seedRecords: ExternalForumRecord[] = [
   {
     id: "forum-record-001",
+    ownerUserId: legacyOwnerUserId,
     title: "中国环境监测产业发展论坛",
     organizer: "行业协会",
     meetingTime: "2026-05-12T09:00:00+08:00",
@@ -33,6 +40,7 @@ const seedRecords: ExternalForumRecord[] = [
   },
   {
     id: "forum-record-002",
+    ownerUserId: legacyOwnerUserId,
     title: "高校实验室安全与运维研讨会",
     organizer: "高校联盟",
     meetingTime: "2026-04-08T10:00:00+08:00",
@@ -50,39 +58,19 @@ const seedRecords: ExternalForumRecord[] = [
   },
 ];
 
-async function ensureDataFile() {
-  await mkdir(dataDir, { recursive: true });
-
-  try {
-    await readFile(externalForumsPath, "utf8");
-  } catch {
-    await writeFile(
-      externalForumsPath,
-      `${JSON.stringify(seedRecords, null, 2)}\n`,
-      "utf8",
-    );
-  }
-}
-
-async function writeExternalForums(records: ExternalForumRecord[]) {
-  await ensureDataFile();
-  await writeFile(
-    externalForumsPath,
-    `${JSON.stringify(records, null, 2)}\n`,
-    "utf8",
-  );
-}
+const externalForumsCollection: JsonCollectionConfig<ExternalForumRecord> = {
+  name: "external-forums",
+  legacyPath: externalForumsPath,
+  seedRecords,
+  normalize: (record) => ({ ...record, ownerUserId: record.ownerUserId || legacyOwnerUserId }),
+};
 
 export async function readExternalForums(): Promise<ExternalForumRecord[]> {
-  await ensureDataFile();
-  const raw = await readFile(externalForumsPath, "utf8");
+  return readJsonCollection(externalForumsCollection);
+}
 
-  try {
-    const parsed = JSON.parse(raw) as ExternalForumRecord[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+export function persistExternalForumOwnershipMigration() {
+  return mutateJsonCollection(externalForumsCollection, (records) => ({ records, result: undefined }));
 }
 
 function splitAttendees(value: string) {
@@ -94,6 +82,7 @@ function splitAttendees(value: string) {
 
 function formToRecord(
   values: ExternalForumFormValues,
+  ownerUserId: string,
   existing?: ExternalForumRecord,
 ): ExternalForumRecord {
   const timestamp = new Date().toISOString();
@@ -102,15 +91,16 @@ function formToRecord(
   const costValue = Number(values.cost);
 
   return {
-    id:
-      existing?.id ??
-      `forum-record-${Date.now().toString(36)}-${Math.random()
-        .toString(36)
-        .slice(2, 8)}`,
+    id: existing?.id ?? `forum-record-${randomUUID()}`,
+    ownerUserId: existing?.ownerUserId ?? ownerUserId,
     title: values.title.trim(),
     organizer: values.organizer.trim(),
     meetingTime: values.meetingTime
-      ? `${values.meetingTime}:00+08:00`
+      ? `${
+          values.meetingTime.length === 16
+            ? `${values.meetingTime}:00`
+            : values.meetingTime
+        }+08:00`
       : timestamp,
     location: values.location.trim(),
     attendees: splitAttendees(values.attendeesText),
@@ -126,45 +116,72 @@ function formToRecord(
     outputs: values.outputs,
     followUp: values.followUp.trim() || undefined,
     notes: values.notes.trim() || undefined,
+    importKey: existing?.importKey,
+    importedAt: existing?.importedAt,
+    importBatchId: existing?.importBatchId,
     createdAt: existing?.createdAt ?? timestamp,
     updatedAt: timestamp,
   };
 }
 
-export async function createExternalForum(values: ExternalForumFormValues) {
-  const records = await readExternalForums();
-  const record = formToRecord(values);
-  await writeExternalForums([record, ...records]);
-  return record;
+export async function createExternalForum(values: ExternalForumFormValues, ownerUserId: string) {
+  return mutateJsonCollection(externalForumsCollection, (records) => {
+    const record = formToRecord(values, ownerUserId);
+    return { records: [record, ...records], result: record };
+  });
 }
 
 export async function updateExternalForum(
   id: string,
   values: ExternalForumFormValues,
 ) {
-  const records = await readExternalForums();
-  const existing = records.find((record) => record.id === id);
+  return mutateJsonCollection(externalForumsCollection, (records) => {
+    const existing = records.find((record) => record.id === id);
 
-  if (!existing) {
-    return null;
-  }
+    if (!existing) {
+      return { records, result: null };
+    }
 
-  const nextRecord = formToRecord(values, existing);
-  await writeExternalForums(
-    records.map((record) => (record.id === id ? nextRecord : record)),
-  );
-  return nextRecord;
+    const nextRecord = formToRecord(values, existing.ownerUserId, existing);
+    return {
+      records: records.map((record) =>
+        record.id === id ? nextRecord : record,
+      ),
+      result: nextRecord,
+    };
+  });
 }
 
 export async function deleteExternalForum(id: string) {
-  const records = await readExternalForums();
-  await writeExternalForums(records.filter((record) => record.id !== id));
+  return mutateJsonCollection(externalForumsCollection, (records) => {
+    const exists = records.some((record) => record.id === id);
+    return {
+      records: exists ? records.filter((record) => record.id !== id) : records,
+      result: exists,
+    };
+  });
 }
 
 export async function appendImportedExternalForums(
   importedRecords: ExternalForumRecord[],
 ) {
-  const records = await readExternalForums();
-  await writeExternalForums([...importedRecords, ...records]);
-  return importedRecords;
+  return mutateJsonCollection(externalForumsCollection, (records) => {
+    const existingKeys = new Set(
+      records.map((record) => `${record.ownerUserId}:${record.importKey}`).filter(Boolean),
+    );
+    const conflict = importedRecords.find(
+      (record) => record.importKey && existingKeys.has(`${record.ownerUserId}:${record.importKey}`),
+    );
+
+    if (conflict) {
+      throw new Error(
+        `历史导入编号 ${conflict.importKey} 已存在，请重新预览后再导入。`,
+      );
+    }
+
+    return {
+      records: [...importedRecords, ...records],
+      result: importedRecords,
+    };
+  });
 }

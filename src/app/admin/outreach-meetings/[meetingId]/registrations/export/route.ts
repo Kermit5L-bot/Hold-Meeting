@@ -2,34 +2,43 @@ import { NextResponse } from "next/server";
 import { findOutreachMeeting } from "@/lib/outreach-meetings-store";
 import {
   mealPreferenceLabels,
-  organizationTypeLabels,
   registrationSourceLabels,
   registrationStatusLabels,
 } from "@/lib/registration-options";
 import { listRegistrationsByMeeting } from "@/lib/registrations-store";
+import { readSettingsLabelMap } from "@/lib/settings-options";
+import { buildCsv } from "@/lib/spreadsheet-export";
 import type { OrganizationType } from "@/lib/types";
-
-function csvCell(value: string | number | undefined) {
-  const text = String(value ?? "");
-  return `"${text.replaceAll("\"", "\"\"")}"`;
-}
+import { getAppDateStamp } from "@/lib/utils";
+import { authorizeAdminRequest, recordInScope, resolveVerifiedRequestScope } from "@/lib/admin-access";
 
 function organizationLabel(
   organizationType: OrganizationType,
   otherOrganizationType?: string,
+  labels: Record<string, string> = {},
 ) {
   return organizationType === "other"
     ? otherOrganizationType || "其他"
-    : organizationTypeLabels[organizationType];
+    : labels[organizationType] ?? organizationType;
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ meetingId: string }> },
 ) {
   const { meetingId } = await params;
   const meeting = await findOutreachMeeting(meetingId);
-  const registrations = await listRegistrationsByMeeting(meetingId);
+  const auth = await authorizeAdminRequest("outreach_meetings"); if ("response" in auth) return auth.response;
+  const scope = await resolveVerifiedRequestScope(auth.user, request);
+
+  if (!meeting || !scope || !recordInScope(meeting.ownerUserId, scope)) {
+    return NextResponse.json({ message: "未找到会议。" }, { status: 404 });
+  }
+
+  const [registrations, organizationTypeLabels] = await Promise.all([
+    listRegistrationsByMeeting(meetingId),
+    readSettingsLabelMap("organizationType"),
+  ]);
   const rows = [
     [
       "报名ID",
@@ -51,11 +60,12 @@ export async function GET(
     ...registrations.map((registration) => [
       registration.id,
       registration.meetingId,
-      meeting?.title ?? "",
+      meeting.title,
       registration.name,
       organizationLabel(
         registration.organizationType,
         registration.otherOrganizationType,
+        organizationTypeLabels,
       ),
       registration.organizationName,
       registration.position ?? "",
@@ -69,13 +79,9 @@ export async function GET(
       registration.notes ?? "",
     ]),
   ];
-  const csv = `\uFEFF${rows
-    .map((row) => row.map((cell) => csvCell(cell)).join(","))
-    .join("\n")}`;
+  const csv = buildCsv(rows);
   const fileName = encodeURIComponent(
-    `${meeting?.title ?? "外联会议"}_报名数据_${new Date()
-      .toISOString()
-      .slice(0, 10)}.csv`,
+    `${meeting.title}_报名数据_${getAppDateStamp()}.csv`,
   );
 
   return new NextResponse(csv, {

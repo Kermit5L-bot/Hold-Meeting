@@ -1,7 +1,10 @@
 import { Suspense } from "react";
 import { LoginForm } from "@/components/auth/login-form";
+import { redirect } from "next/navigation";
+import { getCurrentAdminUser } from "@/lib/server-auth";
 
-export default function LoginPage() {
+export default async function LoginPage() {
+  if (await getCurrentAdminUser()) redirect("/admin");
   return (
     <main className="relative grid min-h-dvh place-items-center overflow-hidden bg-[linear-gradient(135deg,#f8fbff_0%,#eaf4ff_42%,#f6fbff_100%)] px-4 py-10">
       <div

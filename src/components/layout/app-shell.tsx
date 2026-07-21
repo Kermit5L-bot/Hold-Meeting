@@ -1,12 +1,13 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
 import { TopBar } from "@/components/layout/top-bar";
 import { cn } from "@/lib/utils";
+import type { PublicAdminUser } from "@/lib/admin-users";
 
-export function AppShell({ children }: { children: ReactNode }) {
+export function AppShell({ children, currentUser, accountOptions }: { children: ReactNode; currentUser: PublicAdminUser; accountOptions: PublicAdminUser[] }) {
   const pathname = usePathname();
   const isDashboardHome = pathname === "/admin" || pathname === "/admin/dashboard";
 
@@ -17,6 +18,12 @@ export function AppShell({ children }: { children: ReactNode }) {
         isDashboardHome ? "bg-[#040814]" : "bg-canvas",
       )}
     >
+      <a
+        className="fixed left-3 top-3 z-[100] -translate-y-20 rounded-md bg-white px-4 py-2 text-sm font-medium text-brand shadow-lg transition-transform duration-150 focus-visible:translate-y-0"
+        href="#main-content"
+      >
+        跳到主要内容
+      </a>
       <aside
         className={cn(
           "fixed inset-y-0 left-0 hidden w-64 border-r lg:block",
@@ -51,11 +58,13 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </div>
         <div className="py-4">
-          <SidebarNav dark={isDashboardHome} />
+          <Suspense fallback={null}>
+            <SidebarNav currentUser={currentUser} dark={isDashboardHome} />
+          </Suspense>
         </div>
       </aside>
       <div className="lg:pl-64">
-        <TopBar dark={isDashboardHome} />
+        <TopBar accountOptions={accountOptions} currentUser={currentUser} dark={isDashboardHome} />
         <div
           className={cn(
             "border-b lg:hidden",
@@ -64,9 +73,13 @@ export function AppShell({ children }: { children: ReactNode }) {
               : "border-slate-200 bg-white",
           )}
         >
-          <SidebarNav dark={isDashboardHome} mobile />
+          <Suspense fallback={null}>
+            <SidebarNav currentUser={currentUser} dark={isDashboardHome} mobile />
+          </Suspense>
         </div>
-        <main className="px-3 py-4 sm:px-6 sm:py-6 lg:px-8">{children}</main>
+        <main className="px-3 py-4 sm:px-6 sm:py-6 lg:px-8" id="main-content">
+          {children}
+        </main>
       </div>
     </div>
   );

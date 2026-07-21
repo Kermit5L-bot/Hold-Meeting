@@ -1,0 +1,2 @@
+import Link from "next/link";
+export default function ForbiddenPage() { return <div className="mx-auto max-w-xl rounded-lg border border-slate-200 bg-white p-8 text-center"><p className="text-sm font-medium text-blue-600">访问受限</p><h1 className="mt-2 text-2xl font-semibold">当前账号无权访问此功能</h1><p className="mt-3 text-sm text-slate-500">请联系超级管理员调整业务模块授权。</p><Link className="mt-6 inline-flex h-10 items-center rounded-md bg-blue-600 px-4 text-sm font-medium text-white" href="/admin">返回数据看板</Link></div>; }

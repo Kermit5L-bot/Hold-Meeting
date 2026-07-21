@@ -1,13 +1,20 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
+import {
+  mutateJsonCollection,
+  readJsonCollection,
+  type JsonCollectionConfig,
+} from "@/lib/sqlite-json-collection";
 import type { MeetingFormValues, OutreachMeeting } from "@/lib/types";
 
 const dataDir = path.join(process.cwd(), "data");
 const outreachMeetingsPath = path.join(dataDir, "outreach-meetings.json");
+const legacyOwnerUserId = "admin-super-001";
 
 const seedMeetings: OutreachMeeting[] = [
   {
     id: "outreach-001",
+    ownerUserId: legacyOwnerUserId,
     title: "华东区域生态环境客户交流会",
     type: "outreach",
     startTime: "2026-07-18T09:30:00+08:00",
@@ -36,6 +43,7 @@ const seedMeetings: OutreachMeeting[] = [
   },
   {
     id: "outreach-002",
+    ownerUserId: legacyOwnerUserId,
     title: "第三方检测机构技术沙龙",
     type: "outreach",
     startTime: "2026-06-21T13:30:00+08:00",
@@ -64,32 +72,10 @@ const seedMeetings: OutreachMeeting[] = [
   },
 ];
 
-async function ensureDataFile() {
-  await mkdir(dataDir, { recursive: true });
-
-  try {
-    await readFile(outreachMeetingsPath, "utf8");
-  } catch {
-    await writeFile(
-      outreachMeetingsPath,
-      `${JSON.stringify(seedMeetings, null, 2)}\n`,
-      "utf8",
-    );
-  }
-}
-
-async function writeOutreachMeetings(meetings: OutreachMeeting[]) {
-  await ensureDataFile();
-  await writeFile(
-    outreachMeetingsPath,
-    `${JSON.stringify(meetings, null, 2)}\n`,
-    "utf8",
-  );
-}
-
 function normalizeMeeting(meeting: OutreachMeeting): OutreachMeeting {
   return {
     ...meeting,
+    ownerUserId: meeting.ownerUserId || legacyOwnerUserId,
     registrationEnabled: meeting.registrationEnabled ?? true,
     checkinEnabled: meeting.checkinEnabled ?? true,
     mealEnabled: meeting.mealEnabled ?? true,
@@ -107,16 +93,19 @@ function normalizeMeeting(meeting: OutreachMeeting): OutreachMeeting {
   };
 }
 
-export async function readOutreachMeetings(): Promise<OutreachMeeting[]> {
-  await ensureDataFile();
-  const raw = await readFile(outreachMeetingsPath, "utf8");
+const outreachMeetingsCollection: JsonCollectionConfig<OutreachMeeting> = {
+  name: "outreach-meetings",
+  legacyPath: outreachMeetingsPath,
+  seedRecords: seedMeetings,
+  normalize: normalizeMeeting,
+};
 
-  try {
-    const parsed = JSON.parse(raw) as OutreachMeeting[];
-    return Array.isArray(parsed) ? parsed.map(normalizeMeeting) : [];
-  } catch {
-    return [];
-  }
+export async function readOutreachMeetings(): Promise<OutreachMeeting[]> {
+  return readJsonCollection(outreachMeetingsCollection);
+}
+
+export function persistOutreachOwnershipMigration() {
+  return mutateJsonCollection(outreachMeetingsCollection, (records) => ({ records, result: undefined }));
 }
 
 export async function findOutreachMeeting(id: string) {
@@ -125,11 +114,13 @@ export async function findOutreachMeeting(id: string) {
 }
 
 function toStoredDateTime(value: string) {
-  return value ? `${value}:00+08:00` : "";
+  if (!value) return "";
+  return `${value.length === 16 ? `${value}:00` : value}+08:00`;
 }
 
 function formToOutreachMeeting(
   values: MeetingFormValues,
+  ownerUserId: string,
   existing?: OutreachMeeting,
 ): OutreachMeeting {
   const timestamp = new Date().toISOString();
@@ -141,11 +132,8 @@ function formToOutreachMeeting(
   );
 
   return {
-    id:
-      existing?.id ??
-      `outreach-${Date.now().toString(36)}-${Math.random()
-        .toString(36)
-        .slice(2, 8)}`,
+    id: existing?.id ?? `outreach-${randomUUID()}`,
+    ownerUserId: existing?.ownerUserId ?? ownerUserId,
     title: values.title.trim(),
     type: "outreach",
     startTime: toStoredDateTime(values.startTime),
@@ -157,6 +145,9 @@ function formToOutreachMeeting(
     owner: values.owner.trim() || undefined,
     status: values.status,
     notes: values.notes.trim() || undefined,
+    importKey: existing?.importKey,
+    importedAt: existing?.importedAt,
+    importBatchId: existing?.importBatchId,
     createdAt: existing?.createdAt ?? timestamp,
     updatedAt: timestamp,
     registrationEnabled: existing?.registrationEnabled ?? true,
@@ -175,40 +166,66 @@ function formToOutreachMeeting(
   };
 }
 
-export async function createOutreachMeeting(values: MeetingFormValues) {
-  const meetings = await readOutreachMeetings();
-  const meeting = formToOutreachMeeting(values);
-  await writeOutreachMeetings([meeting, ...meetings]);
-  return meeting;
+export async function createOutreachMeeting(values: MeetingFormValues, ownerUserId: string) {
+  return mutateJsonCollection(outreachMeetingsCollection, (meetings) => {
+    const meeting = formToOutreachMeeting(values, ownerUserId);
+    return { records: [meeting, ...meetings], result: meeting };
+  });
 }
 
 export async function updateOutreachMeeting(
   id: string,
   values: MeetingFormValues,
 ) {
-  const meetings = await readOutreachMeetings();
-  const existing = meetings.find((meeting) => meeting.id === id);
+  return mutateJsonCollection(outreachMeetingsCollection, (meetings) => {
+    const existing = meetings.find((meeting) => meeting.id === id);
 
-  if (!existing) {
-    return null;
-  }
+    if (!existing) {
+      return { records: meetings, result: null };
+    }
 
-  const nextMeeting = formToOutreachMeeting(values, existing);
-  await writeOutreachMeetings(
-    meetings.map((meeting) => (meeting.id === id ? nextMeeting : meeting)),
-  );
-  return nextMeeting;
+    const nextMeeting = formToOutreachMeeting(values, existing.ownerUserId, existing);
+    return {
+      records: meetings.map((meeting) =>
+        meeting.id === id ? nextMeeting : meeting,
+      ),
+      result: nextMeeting,
+    };
+  });
 }
 
 export async function deleteOutreachMeeting(id: string) {
-  const meetings = await readOutreachMeetings();
-  await writeOutreachMeetings(meetings.filter((meeting) => meeting.id !== id));
+  return mutateJsonCollection(outreachMeetingsCollection, (meetings) => {
+    const exists = meetings.some((meeting) => meeting.id === id);
+    return {
+      records: exists
+        ? meetings.filter((meeting) => meeting.id !== id)
+        : meetings,
+      result: exists,
+    };
+  });
 }
 
 export async function appendImportedOutreachMeetings(
   importedMeetings: OutreachMeeting[],
 ) {
-  const meetings = await readOutreachMeetings();
-  await writeOutreachMeetings([...importedMeetings, ...meetings]);
-  return importedMeetings;
+  return mutateJsonCollection(outreachMeetingsCollection, (meetings) => {
+    const existingKeys = new Set(
+      meetings.map((meeting) => `${meeting.ownerUserId}:${meeting.importKey}`).filter(Boolean),
+    );
+    const conflict = importedMeetings.find(
+      (meeting) => meeting.importKey && existingKeys.has(`${meeting.ownerUserId}:${meeting.importKey}`),
+    );
+
+    if (conflict) {
+      throw new Error(
+        `历史导入编号 ${conflict.importKey} 已存在，请重新预览后再导入。`,
+      );
+    }
+
+    return {
+      records: [...importedMeetings, ...meetings],
+      result: importedMeetings,
+    };
+  });
 }

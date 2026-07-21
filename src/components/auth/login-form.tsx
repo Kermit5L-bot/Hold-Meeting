@@ -22,31 +22,35 @@ export function LoginForm() {
     }
 
     setSubmitting(true);
-    const response = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        username,
-        password,
-        remember,
-      }),
-    });
-    const data = (await response.json().catch(() => null)) as
-      | { message?: string }
-      | null;
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          username,
+          password,
+          remember,
+        }),
+      });
+      const data = (await response.json().catch(() => null)) as
+        | { message?: string }
+        | null;
 
-    setSubmitting(false);
+      if (!response.ok) {
+        setError(data?.message ?? "账号或密码错误");
+        return;
+      }
 
-    if (!response.ok) {
-      setError(data?.message ?? "账号或密码错误");
-      return;
+      const next = searchParams.get("next");
+      router.replace(next?.startsWith("/admin") ? next : "/admin");
+      router.refresh();
+    } catch {
+      setError("网络连接失败，请检查网络后重试。");
+    } finally {
+      setSubmitting(false);
     }
-
-    const next = searchParams.get("next");
-    router.replace(next?.startsWith("/admin") ? next : "/admin");
-    router.refresh();
   }
 
   return (
@@ -88,7 +92,10 @@ export function LoginForm() {
         记住登录状态
       </label>
       {error ? (
-        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p
+          className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+          role="alert"
+        >
           {error}
         </p>
       ) : null}
@@ -97,7 +104,7 @@ export function LoginForm() {
         disabled={submitting}
         type="submit"
       >
-        {submitting ? "登录中..." : "登录"}
+        {submitting ? "登录中…" : "登录"}
       </button>
     </form>
   );

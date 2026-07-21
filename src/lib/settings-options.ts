@@ -17,3 +17,11 @@ export async function readActiveSettingsOptions(category: SettingsCategory) {
       label: option.label,
     }));
 }
+
+export async function readSettingsLabelMap(category: SettingsCategory) {
+  const options = await readSettingsByCategory(category);
+
+  return Object.fromEntries(
+    options.map((option) => [option.value, option.label]),
+  ) as Record<string, string>;
+}

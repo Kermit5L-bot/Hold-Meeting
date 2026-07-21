@@ -1,21 +1,21 @@
 import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
+import { parseMeetingFormValues } from "@/lib/admin-form-request";
 import {
   deleteOutreachMeeting,
+  findOutreachMeeting,
   updateOutreachMeeting,
 } from "@/lib/outreach-meetings-store";
-import type { MeetingFormValues } from "@/lib/types";
+import { listRegistrationsByMeeting } from "@/lib/registrations-store";
+import { authorizeAdminRequest, recordInScope, resolveVerifiedRequestScope } from "@/lib/admin-access";
+import { readAdminFormAllowedValues } from "@/lib/admin-form-options";
 
-function validate(values: MeetingFormValues) {
-  if (!values.title.trim()) return "请填写会议主题。";
-  if (!values.startTime.trim()) return "请选择会议开始时间。";
-  if (!values.location.trim()) return "请填写会议地点。";
-  if (values.enableWecomNotify && !values.wecomWebhook.trim()) {
-    return "开启企业微信通知后，请填写企业微信机器人 Webhook。";
-  }
-  if (![10, 15, 30].includes(values.wecomCheckinSummaryIntervalMinutes ?? 15)) {
-    return "请选择有效的签到汇总频率。";
-  }
+async function authorizeMeeting(request: Request, meetingId: string) {
+  const auth = await authorizeAdminRequest("outreach_meetings");
+  if ("response" in auth) return auth.response;
+  const scope = await resolveVerifiedRequestScope(auth.user, request);
+  const meeting = await findOutreachMeeting(meetingId);
+  if (!scope || !meeting || !recordInScope(meeting.ownerUserId, scope)) return NextResponse.json({ message: "未找到会议或无权访问" }, { status: 404 });
   return null;
 }
 
@@ -24,14 +24,18 @@ export async function PUT(
   { params }: { params: Promise<{ meetingId: string }> },
 ) {
   const { meetingId } = await params;
-  const values = (await request.json()) as MeetingFormValues;
-  const error = validate(values);
+  const denied = await authorizeMeeting(request, meetingId);
+  if (denied) return denied;
+  const parsed = parseMeetingFormValues(
+    await request.json().catch(() => null),
+    await readAdminFormAllowedValues(),
+  );
 
-  if (error) {
-    return NextResponse.json({ message: error }, { status: 400 });
+  if (!parsed.values) {
+    return NextResponse.json({ message: parsed.error }, { status: 400 });
   }
 
-  const meeting = await updateOutreachMeeting(meetingId, values);
+  const meeting = await updateOutreachMeeting(meetingId, parsed.values);
 
   if (!meeting) {
     return NextResponse.json({ message: "未找到会议。" }, { status: 404 });
@@ -44,11 +48,27 @@ export async function PUT(
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ meetingId: string }> },
 ) {
   const { meetingId } = await params;
-  await deleteOutreachMeeting(meetingId);
+  const denied = await authorizeMeeting(request, meetingId);
+  if (denied) return denied;
+  const registrations = await listRegistrationsByMeeting(meetingId);
+
+  if (registrations.length > 0) {
+    return NextResponse.json(
+      { message: "该会议已有报名或签到数据，不能删除；可将会议状态改为已归档。" },
+      { status: 409 },
+    );
+  }
+
+  const deleted = await deleteOutreachMeeting(meetingId);
+
+  if (!deleted) {
+    return NextResponse.json({ message: "未找到会议。" }, { status: 404 });
+  }
+
   revalidatePath("/admin");
   revalidatePath("/admin/outreach-meetings");
   revalidatePath(`/admin/outreach-meetings/${meetingId}`);

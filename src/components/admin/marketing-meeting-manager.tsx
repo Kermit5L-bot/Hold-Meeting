@@ -6,19 +6,18 @@ import { Download, Edit3, Plus, Search, Trash2, X } from "lucide-react";
 import { CsvImportDialog } from "@/components/admin/csv-import-dialog";
 import { PrimaryButton } from "@/components/admin/primary-button";
 import { DataTableShell } from "@/components/ui/data-table-shell";
+import { requestJson } from "@/lib/client-json-request";
 import { locationTypeLabels, locationTypeOptions } from "@/lib/meeting-options";
-import {
-  internalMeetingTypeLabels,
-  internalMeetingTypeOptions,
-} from "@/lib/marketing-meeting-options";
+import { internalMeetingTypeOptions } from "@/lib/marketing-meeting-options";
 import type {
   InternalMeetingType,
   LocationType,
   MarketingMeetingFormValues,
   MarketingMeetingRecord,
 } from "@/lib/types";
+import type { PublicAdminUser } from "@/lib/admin-users";
 import type { SelectOption } from "@/lib/settings-options";
-import { dateFormatter, numberFormatter } from "@/lib/utils";
+import { dateFormatter, getAppYear, numberFormatter } from "@/lib/utils";
 
 interface Filters {
   year: string;
@@ -26,7 +25,7 @@ interface Filters {
   meetingType: "all" | InternalMeetingType;
 }
 
-const currentYear = String(new Date().getFullYear());
+const currentYear = getAppYear(new Date());
 
 const emptyFilters: Filters = {
   year: currentYear,
@@ -70,9 +69,7 @@ function buildForm(record: MarketingMeetingRecord): MarketingMeetingFormValues {
 
 function getAvailableYears(records: MarketingMeetingRecord[]) {
   const years = new Set(
-    records.map((record) =>
-      new Date(record.meetingTime).getFullYear().toString(),
-    ),
+    records.map((record) => getAppYear(record.meetingTime)).filter(Boolean),
   );
   years.add(currentYear);
   return Array.from(years).sort((a, b) => Number(b) - Number(a));
@@ -87,6 +84,7 @@ function MarketingMeetingFormDialog({
   onClose,
   onSubmit,
   error,
+  submitting,
 }: {
   mode: "create" | "edit";
   values: MarketingMeetingFormValues;
@@ -96,6 +94,7 @@ function MarketingMeetingFormDialog({
   onClose: () => void;
   onSubmit: () => void;
   error: string;
+  submitting: boolean;
 }) {
   const title = mode === "create" ? "新增营销中心会议" : "编辑营销中心会议";
 
@@ -132,6 +131,7 @@ function MarketingMeetingFormDialog({
           <button
             aria-label="关闭营销中心会议表单"
             className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-ink"
+            disabled={submitting}
             onClick={onClose}
             type="button"
           >
@@ -228,10 +228,7 @@ function MarketingMeetingFormDialog({
               value={values.meetingType}
             >
               <option value="">请选择会议类型</option>
-              {(settingMeetingTypeOptions.length
-                ? settingMeetingTypeOptions
-                : internalMeetingTypeOptions
-              ).map((option) => (
+              {settingMeetingTypeOptions.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
@@ -302,7 +299,10 @@ function MarketingMeetingFormDialog({
         </div>
 
         {error ? (
-          <p className="mx-5 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p
+            className="mx-5 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+            role="alert"
+          >
             {error}
           </p>
         ) : null}
@@ -310,16 +310,18 @@ function MarketingMeetingFormDialog({
         <div className="mt-4 flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
           <button
             className="h-10 rounded-md border border-slate-200 px-4 text-sm font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50"
+            disabled={submitting}
             onClick={onClose}
             type="button"
           >
             取消
           </button>
           <button
-            className="h-10 rounded-md bg-brand px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-blue-700"
+            className="h-10 rounded-md bg-brand px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+            disabled={submitting}
             type="submit"
           >
-            保存
+            {submitting ? "保存中…" : "保存"}
           </button>
         </div>
       </form>
@@ -331,23 +333,43 @@ export function MarketingMeetingManager({
   initialRecords,
   departmentOptions,
   meetingTypeOptions: settingMeetingTypeOptions,
+  accountId,
+  accountOptions,
+  showAccountColumn,
 }: {
   initialRecords: MarketingMeetingRecord[];
   departmentOptions: SelectOption[];
   meetingTypeOptions: SelectOption[];
+  accountId: string;
+  accountOptions: PublicAdminUser[];
+  showAccountColumn: boolean;
 }) {
   const [records, setRecords] = useState(initialRecords);
+  const meetingTypeLabelByValue = useMemo(
+    () =>
+      new Map(
+        [...internalMeetingTypeOptions, ...settingMeetingTypeOptions].map(
+          (option) => [option.value, option.label],
+        ),
+      ),
+    [settingMeetingTypeOptions],
+  );
   const [filters, setFilters] = useState(emptyFilters);
   const [formMode, setFormMode] = useState<"create" | "edit" | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formValues, setFormValues] = useState(emptyForm);
   const [error, setError] = useState("");
   const [pendingDelete, setPendingDelete] = useState<MarketingMeetingRecord | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [createOwnerUserId, setCreateOwnerUserId] = useState("");
+  const ownerLabels = useMemo(() => new Map(accountOptions.map((item) => [item.id, item.displayName])), [accountOptions]);
+  const scopeQuery = `?accountId=${encodeURIComponent(accountId)}`;
 
   const years = useMemo(() => getAvailableYears(records), [records]);
   const filteredRecords = useMemo(() => {
     return records.filter((record) => {
-      const year = new Date(record.meetingTime).getFullYear().toString();
+      const year = getAppYear(record.meetingTime);
       const matchesYear = year === filters.year;
       const matchesBusinessUnit =
         !filters.businessUnit.trim() ||
@@ -386,26 +408,32 @@ export function MarketingMeetingManager({
   }
 
   async function saveRecord() {
+    if (saving) return;
     setError("");
-    const url =
+    setSaving(true);
+    if (formMode === "create" && accountId === "all" && !createOwnerUserId) { setError("请选择数据归属账号。"); setSaving(false); return; }
+    const baseUrl =
       formMode === "edit" && editingId
         ? `/api/marketing-meetings/${editingId}`
         : "/api/marketing-meetings";
-    const response = await fetch(url, {
-      method: formMode === "edit" ? "PUT" : "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(formValues),
-    });
-    const data = (await response.json().catch(() => null)) as
-      | { message?: string; record?: MarketingMeetingRecord }
-      | null;
+    const url = `${baseUrl}${scopeQuery}`;
+    const result = await requestJson<{ record?: MarketingMeetingRecord }>(
+      url,
+      {
+        method: formMode === "edit" ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...formValues, ownerUserId: createOwnerUserId || undefined }),
+      },
+      "保存失败，请检查后重试。",
+    );
+    setSaving(false);
 
-    if (!response.ok || !data?.record) {
-      setError(data?.message ?? "保存失败，请检查后重试。");
+    if (!result.ok || !result.data?.record) {
+      setError(result.ok ? "保存失败，请检查后重试。" : result.message);
       return;
     }
 
-    const savedRecord = data.record;
+    const savedRecord = result.data.record;
     setRecords((current) =>
       formMode === "edit"
         ? current.map((record) =>
@@ -418,7 +446,21 @@ export function MarketingMeetingManager({
   }
 
   async function deleteRecord(record: MarketingMeetingRecord) {
-    await fetch(`/api/marketing-meetings/${record.id}`, { method: "DELETE" });
+    if (deleting) return;
+    setError("");
+    setDeleting(true);
+    const result = await requestJson<{ ok?: boolean }>(
+      `/api/marketing-meetings/${record.id}${scopeQuery}`,
+      { method: "DELETE" },
+      "删除失败，请刷新后重试。",
+    );
+    setDeleting(false);
+
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+
     setRecords((current) => current.filter((item) => item.id !== record.id));
     setPendingDelete(null);
   }
@@ -437,6 +479,8 @@ export function MarketingMeetingManager({
         </div>
         <div className="flex flex-wrap gap-2">
           <CsvImportDialog
+            accountId={accountId}
+            ownerOptions={accountOptions}
             confirmUrl="/api/import/marketing-meetings/confirm"
             description="导入营销中心内部会议历史台账，导入后会参与线上线下统计和看板分析。"
             previewUrl="/api/import/marketing-meetings/preview"
@@ -445,10 +489,10 @@ export function MarketingMeetingManager({
           />
           <Link
             className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50"
-            href="/admin/marketing-meetings/export"
+            href={`/admin/marketing-meetings/export${scopeQuery}`}
           >
             <Download aria-hidden="true" className="h-4 w-4" />
-            导出 Excel
+            导出 CSV
           </Link>
           <PrimaryButton onClick={openCreate}>
             <Plus aria-hidden="true" className="h-4 w-4" />
@@ -456,6 +500,7 @@ export function MarketingMeetingManager({
           </PrimaryButton>
         </div>
       </div>
+      {accountId === "all" ? <label className="grid max-w-md gap-1 text-sm font-medium">数据归属账号<select autoComplete="off" className="h-10 rounded-md border border-slate-300 bg-white px-3" name="createOwnerUserId" onChange={(event) => setCreateOwnerUserId(event.target.value)} required value={createOwnerUserId}><option value="">请选择</option>{accountOptions.filter((item) => item.status !== "deleted").map((item) => <option key={item.id} value={item.id}>{item.displayName}（{item.username}）</option>)}</select></label> : null}
 
       <section className="grid gap-4 md:grid-cols-4">
         <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-panel">
@@ -484,7 +529,10 @@ export function MarketingMeetingManager({
         </article>
       </section>
 
-      <form className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-panel md:grid-cols-4">
+      <form
+        className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-panel md:grid-cols-4"
+        onSubmit={(event) => event.preventDefault()}
+      >
         <label className="grid gap-1 text-sm font-medium text-ink">
           年度
           <select
@@ -533,10 +581,7 @@ export function MarketingMeetingManager({
             value={filters.meetingType}
           >
             <option value="all">全部</option>
-            {(settingMeetingTypeOptions.length
-              ? settingMeetingTypeOptions
-              : internalMeetingTypeOptions
-            ).map((option) => (
+            {settingMeetingTypeOptions.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
@@ -569,6 +614,7 @@ export function MarketingMeetingManager({
               <th className="px-5 py-3">地点</th>
               <th className="px-5 py-3">会议类型</th>
               <th className="px-5 py-3">后续事项</th>
+              {showAccountColumn ? <th className="px-5 py-3">数据账号</th> : null}
               <th className="px-5 py-3">操作</th>
             </tr>
           </thead>
@@ -595,12 +641,14 @@ export function MarketingMeetingManager({
                 </td>
                 <td className="px-5 py-4 text-slate-600">
                   {record.meetingType
-                    ? internalMeetingTypeLabels[record.meetingType]
+                    ? meetingTypeLabelByValue.get(record.meetingType) ??
+                      record.meetingType
                     : "-"}
                 </td>
                 <td className="px-5 py-4 text-slate-600">
                   {record.followUp ?? "-"}
                 </td>
+                {showAccountColumn ? <td className="px-5 py-4 text-slate-600">{ownerLabels.get(record.ownerUserId) ?? "已删除账号"}</td> : null}
                 <td className="px-5 py-4">
                   <div className="flex gap-2">
                     <button
@@ -613,7 +661,10 @@ export function MarketingMeetingManager({
                     </button>
                     <button
                       className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 px-3 text-sm font-medium text-red-700 transition-colors duration-150 hover:bg-red-50"
-                      onClick={() => setPendingDelete(record)}
+                      onClick={() => {
+                        setError("");
+                        setPendingDelete(record);
+                      }}
                       type="button"
                     >
                       <Trash2 aria-hidden="true" className="h-4 w-4" />
@@ -625,7 +676,7 @@ export function MarketingMeetingManager({
             ))}
             {filteredRecords.length === 0 ? (
               <tr>
-                <td className="px-5 py-10 text-center text-sm text-muted" colSpan={8}>
+                <td className="px-5 py-10 text-center text-sm text-muted" colSpan={showAccountColumn ? 9 : 8}>
                   暂无符合条件的营销中心会议记录。
                 </td>
               </tr>
@@ -643,6 +694,7 @@ export function MarketingMeetingManager({
           onClose={() => setFormMode(null)}
           onSubmit={saveRecord}
           settingMeetingTypeOptions={settingMeetingTypeOptions}
+          submitting={saving}
           values={formValues}
         />
       ) : null}
@@ -664,20 +716,30 @@ export function MarketingMeetingManager({
             <p className="mt-2 text-sm leading-6 text-muted">
               确认删除“{pendingDelete.title}”？删除后将从营销中心会议台账中移除。
             </p>
+            {error ? (
+              <p
+                className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+                role="alert"
+              >
+                {error}
+              </p>
+            ) : null}
             <div className="mt-5 flex justify-end gap-2">
               <button
                 className="h-10 rounded-md border border-slate-200 px-4 text-sm font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50"
+                disabled={deleting}
                 onClick={() => setPendingDelete(null)}
                 type="button"
               >
                 取消
               </button>
               <button
-                className="h-10 rounded-md bg-red-600 px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-red-700"
+                className="h-10 rounded-md bg-red-600 px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                disabled={deleting}
                 onClick={() => deleteRecord(pendingDelete)}
                 type="button"
               >
-                确认删除
+                {deleting ? "删除中…" : "确认删除"}
               </button>
             </div>
           </section>

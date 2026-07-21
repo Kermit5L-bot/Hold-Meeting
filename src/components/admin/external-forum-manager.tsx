@@ -6,11 +6,9 @@ import { Download, Edit3, Plus, Search, Trash2, X } from "lucide-react";
 import { CsvImportDialog } from "@/components/admin/csv-import-dialog";
 import { PrimaryButton } from "@/components/admin/primary-button";
 import { DataTableShell } from "@/components/ui/data-table-shell";
+import { requestJson } from "@/lib/client-json-request";
 import {
-  attendancePurposeOptions,
-  costTypeLabels,
   costTypeOptions,
-  meetingOutputLabels,
   meetingOutputOptions,
 } from "@/lib/external-forum-options";
 import type {
@@ -19,8 +17,14 @@ import type {
   ExternalForumRecord,
   MeetingOutput,
 } from "@/lib/types";
+import type { PublicAdminUser } from "@/lib/admin-users";
 import type { SelectOption } from "@/lib/settings-options";
-import { currencyFormatter, dateFormatter, numberFormatter } from "@/lib/utils";
+import {
+  currencyFormatter,
+  dateFormatter,
+  getAppYear,
+  numberFormatter,
+} from "@/lib/utils";
 
 interface Filters {
   year: string;
@@ -29,7 +33,7 @@ interface Filters {
   hasSpeech: "all" | "yes" | "no";
 }
 
-const currentYear = String(new Date().getFullYear());
+const currentYear = getAppYear(new Date());
 
 const emptyFilters: Filters = {
   year: currentYear,
@@ -86,9 +90,7 @@ function buildForm(record: ExternalForumRecord): ExternalForumFormValues {
 
 function getAvailableYears(records: ExternalForumRecord[]) {
   const years = new Set(
-    records.map((record) =>
-      new Date(record.meetingTime).getFullYear().toString(),
-    ),
+    records.map((record) => getAppYear(record.meetingTime)).filter(Boolean),
   );
   years.add(currentYear);
   return Array.from(years).sort((a, b) => Number(b) - Number(a));
@@ -144,19 +146,25 @@ function ForumFormDialog({
   values,
   departmentOptions,
   settingCostTypeOptions,
+  settingAttendancePurposeOptions,
+  settingMeetingOutputOptions,
   onChange,
   onClose,
   onSubmit,
   error,
+  submitting,
 }: {
   mode: "create" | "edit";
   values: ExternalForumFormValues;
   departmentOptions: SelectOption[];
   settingCostTypeOptions: SelectOption[];
+  settingAttendancePurposeOptions: SelectOption[];
+  settingMeetingOutputOptions: SelectOption[];
   onChange: (values: ExternalForumFormValues) => void;
   onClose: () => void;
   onSubmit: () => void;
   error: string;
+  submitting: boolean;
 }) {
   const title = mode === "create" ? "新增外部会议&论坛" : "编辑外部会议&论坛";
 
@@ -193,6 +201,7 @@ function ForumFormDialog({
           <button
             aria-label="关闭外部会议表单"
             className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-ink"
+            disabled={submitting}
             onClick={onClose}
             type="button"
           >
@@ -393,7 +402,7 @@ function ForumFormDialog({
               value={values.costType}
             >
               <option value="">请选择费用类型</option>
-              {(settingCostTypeOptions.length ? settingCostTypeOptions : costTypeOptions).map((option) => (
+              {settingCostTypeOptions.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
@@ -421,14 +430,14 @@ function ForumFormDialog({
             label="参会目的"
             name="purposes"
             onChange={(nextValues) => update("purposes", nextValues)}
-            options={attendancePurposeOptions}
+            options={settingAttendancePurposeOptions}
             values={values.purposes}
           />
           <MultiCheckboxGroup<MeetingOutput>
             label="会议产出"
             name="outputs"
             onChange={(nextValues) => update("outputs", nextValues)}
-            options={meetingOutputOptions}
+            options={settingMeetingOutputOptions}
             values={values.outputs}
           />
 
@@ -455,7 +464,10 @@ function ForumFormDialog({
         </div>
 
         {error ? (
-          <p className="mx-5 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p
+            className="mx-5 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+            role="alert"
+          >
             {error}
           </p>
         ) : null}
@@ -463,16 +475,18 @@ function ForumFormDialog({
         <div className="mt-4 flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
           <button
             className="h-10 rounded-md border border-slate-200 px-4 text-sm font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50"
+            disabled={submitting}
             onClick={onClose}
             type="button"
           >
             取消
           </button>
           <button
-            className="h-10 rounded-md bg-brand px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-blue-700"
+            className="h-10 rounded-md bg-brand px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+            disabled={submitting}
             type="submit"
           >
-            保存
+            {submitting ? "保存中…" : "保存"}
           </button>
         </div>
       </form>
@@ -484,23 +498,58 @@ export function ExternalForumManager({
   initialRecords,
   departmentOptions,
   costTypeOptions: settingCostTypeOptions,
+  attendancePurposeOptions: settingAttendancePurposeOptions,
+  meetingOutputOptions: settingMeetingOutputOptions,
+  accountId,
+  accountOptions,
+  showAccountColumn,
 }: {
   initialRecords: ExternalForumRecord[];
   departmentOptions: SelectOption[];
   costTypeOptions: SelectOption[];
+  attendancePurposeOptions: SelectOption[];
+  meetingOutputOptions: SelectOption[];
+  accountId: string;
+  accountOptions: PublicAdminUser[];
+  showAccountColumn: boolean;
 }) {
   const [records, setRecords] = useState(initialRecords);
+  const costTypeLabelByValue = useMemo(
+    () =>
+      new Map(
+        [...costTypeOptions, ...settingCostTypeOptions].map((option) => [
+          option.value,
+          option.label,
+        ]),
+      ),
+    [settingCostTypeOptions],
+  );
+  const meetingOutputLabelByValue = useMemo(
+    () =>
+      new Map(
+        [...meetingOutputOptions, ...settingMeetingOutputOptions].map((option) => [
+          option.value,
+          option.label,
+        ]),
+      ),
+    [settingMeetingOutputOptions],
+  );
   const [filters, setFilters] = useState(emptyFilters);
   const [formMode, setFormMode] = useState<"create" | "edit" | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formValues, setFormValues] = useState(emptyForm);
   const [error, setError] = useState("");
   const [pendingDelete, setPendingDelete] = useState<ExternalForumRecord | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [createOwnerUserId, setCreateOwnerUserId] = useState("");
+  const ownerLabels = useMemo(() => new Map(accountOptions.map((item) => [item.id, item.displayName])), [accountOptions]);
+  const scopeQuery = `?accountId=${encodeURIComponent(accountId)}`;
 
   const years = useMemo(() => getAvailableYears(records), [records]);
   const filteredRecords = useMemo(() => {
     return records.filter((record) => {
-      const year = new Date(record.meetingTime).getFullYear().toString();
+      const year = getAppYear(record.meetingTime);
       const matchesYear = year === filters.year;
       const matchesBusinessUnit =
         !filters.businessUnit.trim() ||
@@ -541,26 +590,32 @@ export function ExternalForumManager({
   }
 
   async function saveRecord() {
+    if (saving) return;
     setError("");
-    const url =
+    setSaving(true);
+    if (formMode === "create" && accountId === "all" && !createOwnerUserId) { setError("请选择数据归属账号。"); setSaving(false); return; }
+    const baseUrl =
       formMode === "edit" && editingId
         ? `/api/external-forums/${editingId}`
         : "/api/external-forums";
-    const response = await fetch(url, {
-      method: formMode === "edit" ? "PUT" : "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(formValues),
-    });
-    const data = (await response.json().catch(() => null)) as
-      | { message?: string; record?: ExternalForumRecord }
-      | null;
+    const url = `${baseUrl}${scopeQuery}`;
+    const result = await requestJson<{ record?: ExternalForumRecord }>(
+      url,
+      {
+        method: formMode === "edit" ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...formValues, ownerUserId: createOwnerUserId || undefined }),
+      },
+      "保存失败，请检查后重试。",
+    );
+    setSaving(false);
 
-    if (!response.ok || !data?.record) {
-      setError(data?.message ?? "保存失败，请检查后重试。");
+    if (!result.ok || !result.data?.record) {
+      setError(result.ok ? "保存失败，请检查后重试。" : result.message);
       return;
     }
 
-    const savedRecord = data.record;
+    const savedRecord = result.data.record;
     setRecords((current) =>
       formMode === "edit"
         ? current.map((record) =>
@@ -573,7 +628,21 @@ export function ExternalForumManager({
   }
 
   async function deleteRecord(record: ExternalForumRecord) {
-    await fetch(`/api/external-forums/${record.id}`, { method: "DELETE" });
+    if (deleting) return;
+    setError("");
+    setDeleting(true);
+    const result = await requestJson<{ ok?: boolean }>(
+      `/api/external-forums/${record.id}${scopeQuery}`,
+      { method: "DELETE" },
+      "删除失败，请刷新后重试。",
+    );
+    setDeleting(false);
+
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+
     setRecords((current) => current.filter((item) => item.id !== record.id));
     setPendingDelete(null);
   }
@@ -592,6 +661,8 @@ export function ExternalForumManager({
         </div>
         <div className="flex flex-wrap gap-2">
           <CsvImportDialog
+            accountId={accountId}
+            ownerOptions={accountOptions}
             confirmUrl="/api/import/external-forums/confirm"
             description="导入我司参加、赞助、演讲的外部会议或行业论坛历史台账。"
             previewUrl="/api/import/external-forums/preview"
@@ -600,10 +671,10 @@ export function ExternalForumManager({
           />
           <Link
             className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50"
-            href="/admin/external-forums/export"
+            href={`/admin/external-forums/export${scopeQuery}`}
           >
             <Download aria-hidden="true" className="h-4 w-4" />
-            导出 Excel
+            导出 CSV
           </Link>
           <PrimaryButton onClick={openCreate}>
             <Plus aria-hidden="true" className="h-4 w-4" />
@@ -611,6 +682,7 @@ export function ExternalForumManager({
           </PrimaryButton>
         </div>
       </div>
+      {accountId === "all" ? <label className="grid max-w-md gap-1 text-sm font-medium">数据归属账号<select autoComplete="off" className="h-10 rounded-md border border-slate-300 bg-white px-3" name="createOwnerUserId" onChange={(event) => setCreateOwnerUserId(event.target.value)} required value={createOwnerUserId}><option value="">请选择</option>{accountOptions.filter((item) => item.status !== "deleted").map((item) => <option key={item.id} value={item.id}>{item.displayName}（{item.username}）</option>)}</select></label> : null}
 
       <section className="grid gap-4 md:grid-cols-4">
         <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-panel">
@@ -639,7 +711,10 @@ export function ExternalForumManager({
         </article>
       </section>
 
-      <form className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-panel md:grid-cols-5">
+      <form
+        className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-panel md:grid-cols-5"
+        onSubmit={(event) => event.preventDefault()}
+      >
         <label className="grid gap-1 text-sm font-medium text-ink">
           年度
           <select
@@ -738,6 +813,7 @@ export function ExternalForumManager({
               <th className="px-5 py-3">部门</th>
               <th className="px-5 py-3">赞助</th>
               <th className="px-5 py-3">会议产出</th>
+              {showAccountColumn ? <th className="px-5 py-3">数据账号</th> : null}
               <th className="px-5 py-3">操作</th>
             </tr>
           </thead>
@@ -764,7 +840,9 @@ export function ExternalForumManager({
                   {record.cost === undefined
                     ? "-"
                     : `${currencyFormatter.format(record.cost)}${
-                        record.costType ? ` / ${costTypeLabels[record.costType]}` : ""
+                        record.costType
+                          ? ` / ${costTypeLabelByValue.get(record.costType) ?? record.costType}`
+                          : ""
                       }`}
                 </td>
                 <td className="px-5 py-4 text-slate-600">{record.businessUnit}</td>
@@ -774,10 +852,14 @@ export function ExternalForumManager({
                 <td className="px-5 py-4 text-slate-600">
                   {record.outputs.length
                     ? record.outputs
-                        .map((output) => meetingOutputLabels[output])
+                        .map(
+                          (output) =>
+                            meetingOutputLabelByValue.get(output) ?? output,
+                        )
                         .join("、")
                     : "-"}
                 </td>
+                {showAccountColumn ? <td className="px-5 py-4 text-slate-600">{ownerLabels.get(record.ownerUserId) ?? "已删除账号"}</td> : null}
                 <td className="px-5 py-4">
                   <div className="flex gap-2">
                     <button
@@ -790,7 +872,10 @@ export function ExternalForumManager({
                     </button>
                     <button
                       className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 px-3 text-sm font-medium text-red-700 transition-colors duration-150 hover:bg-red-50"
-                      onClick={() => setPendingDelete(record)}
+                      onClick={() => {
+                        setError("");
+                        setPendingDelete(record);
+                      }}
                       type="button"
                     >
                       <Trash2 aria-hidden="true" className="h-4 w-4" />
@@ -802,7 +887,7 @@ export function ExternalForumManager({
             ))}
             {filteredRecords.length === 0 ? (
               <tr>
-                <td className="px-5 py-10 text-center text-sm text-muted" colSpan={11}>
+                <td className="px-5 py-10 text-center text-sm text-muted" colSpan={showAccountColumn ? 12 : 11}>
                   暂无符合条件的外部会议记录。
                 </td>
               </tr>
@@ -820,6 +905,9 @@ export function ExternalForumManager({
           onClose={() => setFormMode(null)}
           onSubmit={saveRecord}
           settingCostTypeOptions={settingCostTypeOptions}
+          settingAttendancePurposeOptions={settingAttendancePurposeOptions}
+          settingMeetingOutputOptions={settingMeetingOutputOptions}
+          submitting={saving}
           values={formValues}
         />
       ) : null}
@@ -841,20 +929,30 @@ export function ExternalForumManager({
             <p className="mt-2 text-sm leading-6 text-muted">
               确认删除“{pendingDelete.title}”？删除后将从外部会议台账中移除。
             </p>
+            {error ? (
+              <p
+                className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+                role="alert"
+              >
+                {error}
+              </p>
+            ) : null}
             <div className="mt-5 flex justify-end gap-2">
               <button
                 className="h-10 rounded-md border border-slate-200 px-4 text-sm font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50"
+                disabled={deleting}
                 onClick={() => setPendingDelete(null)}
                 type="button"
               >
                 取消
               </button>
               <button
-                className="h-10 rounded-md bg-red-600 px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-red-700"
+                className="h-10 rounded-md bg-red-600 px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                disabled={deleting}
                 onClick={() => deleteRecord(pendingDelete)}
                 type="button"
               >
-                确认删除
+                {deleting ? "删除中…" : "确认删除"}
               </button>
             </div>
           </section>

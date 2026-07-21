@@ -7,8 +7,14 @@ export type MeetingStatus = "draft" | "published" | "ended" | "archived";
 
 export type LocationType = "online" | "offline";
 
+export type AdminModule =
+  | "outreach_meetings"
+  | "external_forums"
+  | "marketing_meetings";
+
 export interface MeetingBase {
   id: string;
+  ownerUserId: string;
   title: string;
   type: MeetingType;
   startTime: string;
@@ -93,15 +99,7 @@ export interface MeetingFormValues {
   wecomCheckinSummaryIntervalMinutes: 10 | 15 | 30;
 }
 
-export type OrganizationType =
-  | "government"
-  | "college"
-  | "association"
-  | "third_party_operation"
-  | "third_party_testing"
-  | "vendor"
-  | "company"
-  | "other";
+export type OrganizationType = string;
 
 export type MealPreference = "yes" | "no";
 
@@ -157,31 +155,15 @@ export interface RegistrationFormValues {
   notes: string;
 }
 
-export type CostType =
-  | "registration_fee"
-  | "sponsorship_fee"
-  | "booth_fee"
-  | "conference_fee"
-  | "other";
+export type CostType = string;
 
-export type AttendancePurpose =
-  | "brand_exposure"
-  | "customer_maintenance"
-  | "industry_exchange"
-  | "business_development"
-  | "learning_research"
-  | "other";
+export type AttendancePurpose = string;
 
-export type MeetingOutput =
-  | "press_release"
-  | "video"
-  | "photo"
-  | "minutes"
-  | "customer_leads"
-  | "other";
+export type MeetingOutput = string;
 
 export interface ExternalForumRecord {
   id: string;
+  ownerUserId: string;
   title: string;
   organizer: string;
   meetingTime: string;
@@ -226,16 +208,11 @@ export interface ExternalForumFormValues {
   notes: string;
 }
 
-export type InternalMeetingType =
-  | "regular"
-  | "special"
-  | "training"
-  | "review"
-  | "coordination"
-  | "other";
+export type InternalMeetingType = string;
 
 export interface MarketingMeetingRecord {
   id: string;
+  ownerUserId: string;
   title: string;
   businessUnit: string;
   attendees: string[];
@@ -284,7 +261,6 @@ export interface SettingsOption {
   label: string;
   enabled: boolean;
   sortOrder: number;
-  system?: boolean;
   createdAt: string;
   updatedAt: string;
 }

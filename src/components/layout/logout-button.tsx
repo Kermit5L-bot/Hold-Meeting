@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { LogOut } from "lucide-react";
+import { LoaderCircle, LogOut } from "lucide-react";
+import { requestJson } from "@/lib/client-json-request";
 import { cn } from "@/lib/utils";
 
 export function LogoutButton({
@@ -12,9 +14,22 @@ export function LogoutButton({
   compact?: boolean;
 }) {
   const router = useRouter();
+  const [submitting, setSubmitting] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   async function logout() {
-    await fetch("/api/auth/logout", { method: "POST" });
+    setSubmitting(true);
+    setFailed(false);
+    const result = await requestJson<{ ok?: boolean }>("/api/auth/logout", {
+      method: "POST",
+    }, "退出失败，请重试。");
+
+    if (!result.ok) {
+      setFailed(true);
+      setSubmitting(false);
+      return;
+    }
+
     router.replace("/login");
     router.refresh();
   }
@@ -27,13 +42,22 @@ export function LogoutButton({
         dark
           ? "border-cyan-300/20 bg-white/[0.06] text-cyan-50 hover:bg-cyan-300/10"
           : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
+        failed && "border-red-300 text-red-700",
       )}
-      aria-label="退出登录"
+      aria-label={failed ? "退出失败，请重试" : "退出登录"}
+      disabled={submitting}
       onClick={logout}
+      title={failed ? "退出失败，请重试" : undefined}
       type="button"
     >
-      <LogOut aria-hidden="true" className="h-4 w-4" />
-      <span className={cn(compact && "sr-only")}>退出</span>
+      {submitting ? (
+        <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />
+      ) : (
+        <LogOut aria-hidden="true" className="h-4 w-4" />
+      )}
+      <span className={cn(compact && "sr-only")}>
+        {submitting ? "退出中..." : failed ? "退出失败，请重试" : "退出"}
+      </span>
     </button>
   );
 }

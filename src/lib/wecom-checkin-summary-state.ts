@@ -1,5 +1,9 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import {
+  mutateJsonCollection,
+  readJsonCollection,
+  type JsonCollectionConfig,
+} from "@/lib/sqlite-json-collection";
 
 export interface WecomCheckinSummaryState {
   meetingId: string;
@@ -7,25 +11,39 @@ export interface WecomCheckinSummaryState {
   lastCheckinCount: number;
   lastRegistrationCount: number;
   lastNotCheckedInCount: number;
+  completedAt?: string;
 }
 
 const dataDir = path.join(process.cwd(), "data");
 const statePath = path.join(dataDir, "wecom-checkin-summary-state.json");
 
-async function ensureDataDir() {
-  await mkdir(dataDir, { recursive: true });
+interface StoredWecomCheckinSummaryState extends WecomCheckinSummaryState {
+  id: string;
+}
+
+const stateCollection: JsonCollectionConfig<StoredWecomCheckinSummaryState> = {
+  name: "wecom-checkin-summary-state",
+  legacyPath: statePath,
+  seedRecords: [],
+  normalize: (state) => ({
+    ...state,
+    id: state.id || state.meetingId,
+  }),
+};
+
+function toPublicState(state: StoredWecomCheckinSummaryState) {
+  return {
+    meetingId: state.meetingId,
+    lastSentAt: state.lastSentAt,
+    lastCheckinCount: state.lastCheckinCount,
+    lastRegistrationCount: state.lastRegistrationCount,
+    lastNotCheckedInCount: state.lastNotCheckedInCount,
+    completedAt: state.completedAt,
+  };
 }
 
 export async function readWecomCheckinSummaryStates() {
-  await ensureDataDir();
-
-  try {
-    const raw = await readFile(statePath, "utf8");
-    const parsed = JSON.parse(raw) as WecomCheckinSummaryState[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+  return readJsonCollection(stateCollection).map(toPublicState);
 }
 
 export async function readWecomCheckinSummaryState(meetingId: string) {
@@ -36,11 +54,11 @@ export async function readWecomCheckinSummaryState(meetingId: string) {
 export async function writeWecomCheckinSummaryState(
   nextState: WecomCheckinSummaryState,
 ) {
-  const states = await readWecomCheckinSummaryStates();
-  const nextStates = [
-    nextState,
-    ...states.filter((state) => state.meetingId !== nextState.meetingId),
-  ];
-
-  await writeFile(statePath, `${JSON.stringify(nextStates, null, 2)}\n`, "utf8");
+  mutateJsonCollection(stateCollection, (states) => ({
+    records: [
+      { ...nextState, id: nextState.meetingId },
+      ...states.filter((state) => state.meetingId !== nextState.meetingId),
+    ],
+    result: undefined,
+  }));
 }

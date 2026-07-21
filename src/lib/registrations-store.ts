@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -22,6 +23,7 @@ interface SqliteStatement {
 }
 
 interface SqliteDatabase {
+  close(): void;
   exec(sql: string): void;
   prepare(sql: string): SqliteStatement;
 }
@@ -51,6 +53,42 @@ interface RegistrationRow {
   import_batch_id: string | null;
   wecom_notify_status: WecomNotifyStatus | null;
   wecom_notify_error: string | null;
+}
+
+export type WecomNotificationKind = "registration" | "walk_in_checkin";
+export type WecomNotificationJobStatus =
+  | "pending"
+  | "processing"
+  | "succeeded"
+  | "skipped"
+  | "dead";
+
+interface WecomNotificationJobRow {
+  id: string;
+  registration_id: string;
+  meeting_id: string;
+  kind: WecomNotificationKind;
+  status: WecomNotificationJobStatus;
+  attempt_count: number;
+  next_attempt_at: string;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  claimed_at: string | null;
+}
+
+export interface WecomNotificationJob {
+  id: string;
+  registrationId: string;
+  meetingId: string;
+  kind: WecomNotificationKind;
+  status: WecomNotificationJobStatus;
+  attemptCount: number;
+  nextAttemptAt: string;
+  lastError?: string;
+  createdAt: string;
+  updatedAt: string;
+  claimedAt?: string;
 }
 
 const require = createRequire(import.meta.url);
@@ -119,43 +157,103 @@ function getDb() {
 
     CREATE INDEX IF NOT EXISTS registrations_import_key
       ON registrations (import_key);
+
+    CREATE TABLE IF NOT EXISTS wecom_notification_jobs (
+      id TEXT PRIMARY KEY,
+      registration_id TEXT NOT NULL,
+      meeting_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at TEXT NOT NULL,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      claimed_at TEXT,
+      UNIQUE (registration_id, kind)
+    );
+
+    CREATE INDEX IF NOT EXISTS wecom_notification_jobs_due
+      ON wecom_notification_jobs (status, next_attempt_at);
+
+    CREATE TABLE IF NOT EXISTS app_data_migrations (
+      migration_key TEXT PRIMARY KEY,
+      migrated_at TEXT NOT NULL
+    );
   `);
 
+  try {
+    migrateLegacyJsonIfNeeded(db);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+
   globalForDb.__holdMeetingRegistrationsDb = db;
-  migrateLegacyJsonIfNeeded(db);
   return db;
 }
 
 function migrateLegacyJsonIfNeeded(db: SqliteDatabase) {
-  const countRow = db.prepare("SELECT COUNT(*) AS count FROM registrations").get() as
-    | { count: number }
-    | undefined;
+  const migrationKey = "registrations-json-v1";
+  const migrated = db
+    .prepare("SELECT migration_key FROM app_data_migrations WHERE migration_key = ?")
+    .get(migrationKey);
 
-  if ((countRow?.count ?? 0) > 0 || !existsSync(legacyRegistrationsPath)) {
+  if (migrated) {
     return;
   }
 
-  try {
+  let legacyRegistrations: Registration[] = [];
+
+  if (existsSync(legacyRegistrationsPath)) {
     const raw = readFileSync(legacyRegistrationsPath, "utf8");
-    const parsed = JSON.parse(raw) as Registration[];
+    let parsed: unknown;
 
-    if (!Array.isArray(parsed) || parsed.length === 0) {
-      return;
-    }
-
-    const insert = db.prepare(insertRegistrationSql("OR IGNORE"));
-    db.exec("BEGIN IMMEDIATE;");
     try {
-      for (const registration of parsed) {
-        insert.run(...registrationParams(normalizeRegistration(registration)));
-      }
-      db.exec("COMMIT;");
+      parsed = JSON.parse(raw);
     } catch (error) {
-      db.exec("ROLLBACK;");
-      throw error;
+      const detail = error instanceof Error ? error.message : "未知解析错误";
+      throw new Error(
+        `历史报名数据文件 ${legacyRegistrationsPath} 解析失败，已停止迁移以保护原数据：${detail}`,
+      );
     }
+
+    if (!Array.isArray(parsed)) {
+      throw new Error(
+        `历史报名数据文件 ${legacyRegistrationsPath} 格式无效，已停止迁移以保护原数据。`,
+      );
+    }
+
+    legacyRegistrations = parsed as Registration[];
+  }
+
+  db.exec("BEGIN IMMEDIATE;");
+  try {
+    const migratedInsideTransaction = db
+      .prepare("SELECT migration_key FROM app_data_migrations WHERE migration_key = ?")
+      .get(migrationKey);
+
+    if (!migratedInsideTransaction) {
+      const countRow = db
+        .prepare("SELECT COUNT(*) AS count FROM registrations")
+        .get() as { count: number } | undefined;
+
+      if ((countRow?.count ?? 0) === 0) {
+        const insert = db.prepare(insertRegistrationSql());
+        for (const registration of legacyRegistrations) {
+          insert.run(...registrationParams(normalizeRegistration(registration)));
+        }
+      }
+
+      db.prepare(
+        "INSERT INTO app_data_migrations (migration_key, migrated_at) VALUES (?, ?)",
+      ).run(migrationKey, new Date().toISOString());
+    }
+
+    db.exec("COMMIT;");
   } catch (error) {
-    console.error("历史报名 JSON 迁移到 SQLite 失败", error);
+    db.exec("ROLLBACK;");
+    throw error;
   }
 }
 
@@ -259,6 +357,57 @@ function registrationParams(registration: Registration): SqliteValue[] {
   ];
 }
 
+function rowToWecomNotificationJob(
+  row: WecomNotificationJobRow,
+): WecomNotificationJob {
+  return {
+    id: row.id,
+    registrationId: row.registration_id,
+    meetingId: row.meeting_id,
+    kind: row.kind,
+    status: row.status,
+    attemptCount: row.attempt_count,
+    nextAttemptAt: row.next_attempt_at,
+    lastError: row.last_error ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    claimedAt: row.claimed_at ?? undefined,
+  };
+}
+
+function insertWecomNotificationJob(
+  db: SqliteDatabase,
+  registration: Registration,
+) {
+  const timestamp = new Date().toISOString();
+  const kind: WecomNotificationKind =
+    registration.source === "walk_in" ? "walk_in_checkin" : "registration";
+
+  db.prepare(
+    `
+      INSERT OR IGNORE INTO wecom_notification_jobs (
+        id,
+        registration_id,
+        meeting_id,
+        kind,
+        status,
+        attempt_count,
+        next_attempt_at,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+    `,
+  ).run(
+    `wecom-job-${randomUUID()}`,
+    registration.id,
+    registration.meetingId,
+    kind,
+    timestamp,
+    timestamp,
+    timestamp,
+  );
+}
+
 function isUniqueConstraintError(error: unknown) {
   return (
     error instanceof Error &&
@@ -341,9 +490,7 @@ export async function createRegistration(
 ) {
   const timestamp = new Date().toISOString();
   const registration: Registration = {
-    id: `reg-${Date.now().toString(36)}-${Math.random()
-      .toString(36)
-      .slice(2, 8)}`,
+    id: `reg-${randomUUID()}`,
     meetingId: values.meetingId,
     status: "registered",
     source,
@@ -368,9 +515,20 @@ export async function createRegistration(
     wecomNotifyStatus: "not_sent",
   };
 
+  const db = getDb();
+
   try {
-    getDb().prepare(insertRegistrationSql()).run(...registrationParams(registration));
+    db.exec("BEGIN IMMEDIATE;");
+    db.prepare(insertRegistrationSql()).run(...registrationParams(registration));
+    insertWecomNotificationJob(db, registration);
+    db.exec("COMMIT;");
   } catch (error) {
+    try {
+      db.exec("ROLLBACK;");
+    } catch {
+      // The insert may fail before SQLite opens the transaction.
+    }
+
     if (!isUniqueConstraintError(error)) {
       throw error;
     }
@@ -476,30 +634,283 @@ export async function createWalkInRegistrationAndCheckin(
   });
 }
 
-export async function updateRegistrationWecomNotifyStatus(
-  registrationId: string,
-  status: WecomNotifyStatus,
-  error?: string,
+export async function claimDueWecomNotificationJobs(
+  limit = 10,
+  now = new Date(),
 ) {
+  const db = getDb();
+  const nowIso = now.toISOString();
+  const staleBefore = new Date(now.getTime() - 2 * 60 * 1000).toISOString();
+  const safeLimit = Math.max(1, Math.min(50, Math.trunc(limit)));
+
+  db.exec("BEGIN IMMEDIATE;");
+  try {
+    db.prepare(
+      `
+        UPDATE wecom_notification_jobs
+        SET status = 'pending',
+            claimed_at = NULL,
+            next_attempt_at = ?,
+            updated_at = ?
+        WHERE status = 'processing'
+          AND claimed_at < ?
+      `,
+    ).run(nowIso, nowIso, staleBefore);
+
+    const rows = db
+      .prepare(
+        `
+          SELECT *
+          FROM wecom_notification_jobs
+          WHERE status = 'pending'
+            AND next_attempt_at <= ?
+          ORDER BY next_attempt_at ASC, created_at ASC
+          LIMIT ?
+        `,
+      )
+      .all(nowIso, safeLimit) as WecomNotificationJobRow[];
+
+    const claim = db.prepare(
+      `
+        UPDATE wecom_notification_jobs
+        SET status = 'processing',
+            attempt_count = attempt_count + 1,
+            claimed_at = ?,
+            updated_at = ?
+        WHERE id = ?
+          AND status = 'pending'
+      `,
+    );
+
+    const jobs: WecomNotificationJob[] = [];
+    for (const row of rows) {
+      const result = claim.run(nowIso, nowIso, row.id) as { changes?: number };
+      if (result.changes) {
+        jobs.push(
+          rowToWecomNotificationJob({
+            ...row,
+            status: "processing",
+            attempt_count: row.attempt_count + 1,
+            claimed_at: nowIso,
+            updated_at: nowIso,
+          }),
+        );
+      }
+    }
+
+    db.exec("COMMIT;");
+    return jobs;
+  } catch (error) {
+    db.exec("ROLLBACK;");
+    throw error;
+  }
+}
+
+export async function completeWecomNotificationJob(
+  job: WecomNotificationJob,
+  sent: boolean,
+) {
+  const db = getDb();
   const timestamp = new Date().toISOString();
-  getDb()
+
+  db.exec("BEGIN IMMEDIATE;");
+  try {
+    db.prepare(
+      `
+        UPDATE wecom_notification_jobs
+        SET status = ?,
+            claimed_at = NULL,
+            last_error = NULL,
+            updated_at = ?
+        WHERE id = ?
+      `,
+    ).run(sent ? "succeeded" : "skipped", timestamp, job.id);
+
+    if (sent) {
+      db.prepare(
+        `
+          UPDATE registrations
+          SET wecom_notify_status = 'success',
+              wecom_notify_error = NULL,
+              updated_at = ?
+          WHERE id = ?
+        `,
+      ).run(timestamp, job.registrationId);
+    }
+
+    db.exec("COMMIT;");
+  } catch (error) {
+    db.exec("ROLLBACK;");
+    throw error;
+  }
+}
+
+export async function listWecomNotificationJobsByMeeting(meetingId: string) {
+  const rows = getDb()
     .prepare(
       `
+        SELECT *
+        FROM wecom_notification_jobs
+        WHERE meeting_id = ?
+        ORDER BY created_at DESC
+      `,
+    )
+    .all(meetingId) as WecomNotificationJobRow[];
+  return rows.map(rowToWecomNotificationJob);
+}
+
+export async function retryFailedWecomNotificationJobs(meetingId: string) {
+  const db = getDb();
+  const timestamp = new Date().toISOString();
+
+  db.exec("BEGIN IMMEDIATE;");
+  try {
+    const deadJobs = db
+      .prepare(
+        `
+          SELECT registration_id
+          FROM wecom_notification_jobs
+          WHERE meeting_id = ?
+            AND status = 'dead'
+        `,
+      )
+      .all(meetingId) as Array<{ registration_id: string }>;
+
+    db.prepare(
+      `
+        UPDATE wecom_notification_jobs
+        SET status = 'pending',
+            attempt_count = 0,
+            next_attempt_at = ?,
+            claimed_at = NULL,
+            last_error = NULL,
+            updated_at = ?
+        WHERE meeting_id = ?
+          AND status = 'dead'
+      `,
+    ).run(timestamp, timestamp, meetingId);
+
+    const legacyFailures = db
+      .prepare(
+        `
+          SELECT id, source
+          FROM registrations
+          WHERE meeting_id = ?
+            AND status = 'registered'
+            AND wecom_notify_status = 'failed'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM wecom_notification_jobs jobs
+              WHERE jobs.registration_id = registrations.id
+            )
+        `,
+      )
+      .all(meetingId) as Array<{
+      id: string;
+      source: RegistrationSource;
+    }>;
+
+    const insertJob = db.prepare(
+      `
+        INSERT INTO wecom_notification_jobs (
+          id,
+          registration_id,
+          meeting_id,
+          kind,
+          status,
+          attempt_count,
+          next_attempt_at,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+      `,
+    );
+    for (const registration of legacyFailures) {
+      const kind: WecomNotificationKind =
+        registration.source === "walk_in"
+          ? "walk_in_checkin"
+          : "registration";
+      insertJob.run(
+        `wecom-job-${randomUUID()}`,
+        registration.id,
+        meetingId,
+        kind,
+        timestamp,
+        timestamp,
+        timestamp,
+      );
+    }
+
+    const registrationIds = [
+      ...deadJobs.map((job) => job.registration_id),
+      ...legacyFailures.map((registration) => registration.id),
+    ];
+    const resetRegistration = db.prepare(
+      `
         UPDATE registrations
-        SET wecom_notify_status = ?,
+        SET wecom_notify_status = 'not_sent',
+            wecom_notify_error = NULL,
+            updated_at = ?
+        WHERE id = ?
+      `,
+    );
+    for (const registrationId of registrationIds) {
+      resetRegistration.run(timestamp, registrationId);
+    }
+
+    db.exec("COMMIT;");
+    return registrationIds.length;
+  } catch (error) {
+    db.exec("ROLLBACK;");
+    throw error;
+  }
+}
+
+export async function failWecomNotificationJob(
+  job: WecomNotificationJob,
+  error: string,
+  nextAttemptAt: Date | null,
+) {
+  const db = getDb();
+  const timestamp = new Date().toISOString();
+  const status: WecomNotificationJobStatus = nextAttemptAt ? "pending" : "dead";
+
+  db.exec("BEGIN IMMEDIATE;");
+  try {
+    db.prepare(
+      `
+        UPDATE wecom_notification_jobs
+        SET status = ?,
+            next_attempt_at = ?,
+            claimed_at = NULL,
+            last_error = ?,
+            updated_at = ?
+        WHERE id = ?
+      `,
+    ).run(status, nextAttemptAt?.toISOString() ?? timestamp, error, timestamp, job.id);
+
+    db.prepare(
+      `
+        UPDATE registrations
+        SET wecom_notify_status = 'failed',
             wecom_notify_error = ?,
             updated_at = ?
         WHERE id = ?
       `,
-    )
-    .run(status, error ?? null, timestamp, registrationId);
+    ).run(error, timestamp, job.registrationId);
+
+    db.exec("COMMIT;");
+  } catch (failure) {
+    db.exec("ROLLBACK;");
+    throw failure;
+  }
 }
 
 export async function appendImportedRegistrations(
   importedRegistrations: Registration[],
 ) {
   const db = getDb();
-  const insert = db.prepare(insertRegistrationSql("OR IGNORE"));
+  const insert = db.prepare(insertRegistrationSql());
 
   db.exec("BEGIN IMMEDIATE;");
   try {
@@ -509,6 +920,9 @@ export async function appendImportedRegistrations(
     db.exec("COMMIT;");
   } catch (error) {
     db.exec("ROLLBACK;");
+    if (isUniqueConstraintError(error)) {
+      throw new Error("报名数据已发生变化，请重新预览后再导入。");
+    }
     throw error;
   }
 

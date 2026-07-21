@@ -1,38 +1,35 @@
 import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
+import { parseMeetingFormValues } from "@/lib/admin-form-request";
 import {
   createOutreachMeeting,
   readOutreachMeetings,
 } from "@/lib/outreach-meetings-store";
-import type { MeetingFormValues } from "@/lib/types";
+import { authorizeAdminRequest, recordInScope, resolveVerifiedRequestScope, resolveWriteOwner } from "@/lib/admin-access";
+import { readAdminFormAllowedValues } from "@/lib/admin-form-options";
 
-function validate(values: MeetingFormValues) {
-  if (!values.title.trim()) return "请填写会议主题。";
-  if (!values.startTime.trim()) return "请选择会议开始时间。";
-  if (!values.location.trim()) return "请填写会议地点。";
-  if (values.enableWecomNotify && !values.wecomWebhook.trim()) {
-    return "开启企业微信通知后，请填写企业微信机器人 Webhook。";
-  }
-  if (![10, 15, 30].includes(values.wecomCheckinSummaryIntervalMinutes ?? 15)) {
-    return "请选择有效的签到汇总频率。";
-  }
-  return null;
-}
-
-export async function GET() {
-  const meetings = await readOutreachMeetings();
+export async function GET(request: Request) {
+  const auth = await authorizeAdminRequest("outreach_meetings");
+  if ("response" in auth) return auth.response;
+  const scope = await resolveVerifiedRequestScope(auth.user, request);
+  if (!scope) return NextResponse.json({ message: "无权查看该账号数据" }, { status: 403 });
+  const meetings = (await readOutreachMeetings()).filter((item) => recordInScope(item.ownerUserId, scope));
   return NextResponse.json({ meetings });
 }
 
 export async function POST(request: Request) {
-  const values = (await request.json()) as MeetingFormValues;
-  const error = validate(values);
+  const auth = await authorizeAdminRequest("outreach_meetings");
+  if ("response" in auth) return auth.response;
+  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+  const parsed = parseMeetingFormValues(body, await readAdminFormAllowedValues());
 
-  if (error) {
-    return NextResponse.json({ message: error }, { status: 400 });
+  if (!parsed.values) {
+    return NextResponse.json({ message: parsed.error }, { status: 400 });
   }
 
-  const meeting = await createOutreachMeeting(values);
+  const ownerUserId = await resolveWriteOwner(auth.user, request, body);
+  if (!ownerUserId) return NextResponse.json({ message: "请选择有效的数据归属账号" }, { status: 400 });
+  const meeting = await createOutreachMeeting(parsed.values, ownerUserId);
   revalidatePath("/admin");
   revalidatePath("/admin/outreach-meetings");
   return NextResponse.json({ meeting });

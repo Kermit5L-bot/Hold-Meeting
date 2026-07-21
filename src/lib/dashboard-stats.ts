@@ -1,6 +1,7 @@
 import { meetingOutputLabels } from "@/lib/external-forum-options";
 import { internalMeetingTypeLabels } from "@/lib/marketing-meeting-options";
 import { organizationTypeLabels } from "@/lib/registration-options";
+import { getAppMonth, getAppYear } from "@/lib/utils";
 import type {
   ExternalForumRecord,
   MarketingMeetingRecord,
@@ -20,7 +21,7 @@ export interface RankItem {
   value: number;
 }
 
-export const currentDashboardYear = String(new Date().getFullYear());
+export const currentDashboardYear = getAppYear(new Date());
 
 export const defaultDashboardFilters: DashboardFilters = {
   year: currentDashboardYear,
@@ -30,17 +31,13 @@ export const defaultDashboardFilters: DashboardFilters = {
 };
 
 export function getDashboardYear(value: string) {
-  return new Date(value).getFullYear().toString();
-}
-
-function getMonth(value: string) {
-  return String(new Date(value).getMonth() + 1);
+  return getAppYear(value);
 }
 
 function matchesDate(value: string, filters: DashboardFilters) {
   return (
     getDashboardYear(value) === filters.year &&
-    (filters.month === "all" || getMonth(value) === filters.month)
+    (filters.month === "all" || getAppMonth(value) === filters.month)
   );
 }
 
@@ -65,7 +62,7 @@ function monthlyCounts<T>(items: T[], getDate: (item: T) => string) {
   }));
 
   for (const item of items) {
-    const month = new Date(getDate(item)).getMonth();
+    const month = Number(getAppMonth(getDate(item))) - 1;
 
     if (month >= 0 && month < 12) {
       months[month].value += 1;
@@ -91,15 +88,18 @@ export function getDashboardYears({
   marketingMeetings: MarketingMeetingRecord[];
 }) {
   const allYears = new Set<string>([currentDashboardYear]);
-  outreachMeetings.forEach((meeting) =>
-    allYears.add(getDashboardYear(meeting.startTime)),
-  );
-  externalForums.forEach((meeting) =>
-    allYears.add(getDashboardYear(meeting.meetingTime)),
-  );
-  marketingMeetings.forEach((meeting) =>
-    allYears.add(getDashboardYear(meeting.meetingTime)),
-  );
+  outreachMeetings.forEach((meeting) => {
+    const year = getDashboardYear(meeting.startTime);
+    if (year) allYears.add(year);
+  });
+  externalForums.forEach((meeting) => {
+    const year = getDashboardYear(meeting.meetingTime);
+    if (year) allYears.add(year);
+  });
+  marketingMeetings.forEach((meeting) => {
+    const year = getDashboardYear(meeting.meetingTime);
+    if (year) allYears.add(year);
+  });
   return Array.from(allYears).sort((a, b) => Number(b) - Number(a));
 }
 
@@ -109,12 +109,18 @@ export function buildDashboardStats({
   externalForums,
   marketingMeetings,
   filters,
+  optionLabels = {},
 }: {
   outreachMeetings: OutreachMeeting[];
   registrations: Registration[];
   externalForums: ExternalForumRecord[];
   marketingMeetings: MarketingMeetingRecord[];
   filters: DashboardFilters;
+  optionLabels?: {
+    organizationType?: Record<string, string>;
+    meetingOutput?: Record<string, string>;
+    marketingMeetingType?: Record<string, string>;
+  };
 }) {
   const filteredOutreach = outreachMeetings.filter(
     (meeting) =>
@@ -158,7 +164,9 @@ export function buildDashboardStats({
       unitTypeMap,
       registration.organizationType === "other"
         ? registration.otherOrganizationType || "其他"
-        : organizationTypeLabels[registration.organizationType],
+        : optionLabels.organizationType?.[registration.organizationType] ??
+          organizationTypeLabels[registration.organizationType] ??
+          registration.organizationType,
     );
     addToRank(regionMap, meeting?.region || "未填写区域");
     addToRank(registrationRankMap, meeting?.title || registration.meetingId);
@@ -202,7 +210,12 @@ export function buildDashboardStats({
     }
 
     for (const output of meeting.outputs) {
-      addToRank(outputMap, meetingOutputLabels[output]);
+      addToRank(
+        outputMap,
+        optionLabels.meetingOutput?.[output] ??
+          meetingOutputLabels[output] ??
+          output,
+      );
     }
   }
 
@@ -223,7 +236,11 @@ export function buildDashboardStats({
     addToRank(marketingBusinessUnitMap, meeting.businessUnit || "未填写部门");
     addToRank(
       marketingTypeMap,
-      meeting.meetingType ? internalMeetingTypeLabels[meeting.meetingType] : "未填写",
+      meeting.meetingType
+        ? optionLabels.marketingMeetingType?.[meeting.meetingType] ??
+          internalMeetingTypeLabels[meeting.meetingType] ??
+          meeting.meetingType
+        : "未填写",
     );
   }
 

@@ -3,12 +3,17 @@ import {
   organizationTypeLabels,
 } from "@/lib/registration-options";
 import type { OutreachMeeting, Registration } from "@/lib/types";
+import { readSettingsLabelMap } from "@/lib/settings-options";
 import { dateFormatter } from "@/lib/utils";
 
 interface NotifyResult {
   ok: boolean;
   error?: string;
 }
+
+const wecomWebhookHost = "qyapi.weixin.qq.com";
+const wecomWebhookPath = "/cgi-bin/webhook/send";
+const wecomRequestTimeoutMs = 10_000;
 
 export interface WecomMeetingStats {
   registrationCount: number;
@@ -37,12 +42,19 @@ export function buildWecomMeetingStats(registrations: Registration[]): WecomMeet
   };
 }
 
-function organizationLabel(registration: Registration) {
+function organizationLabel(
+  registration: Registration,
+  labels: Record<string, string> = {},
+) {
   if (registration.organizationType === "other") {
     return registration.otherOrganizationType || "其他";
   }
 
-  return organizationTypeLabels[registration.organizationType];
+  return (
+    labels[registration.organizationType] ??
+    organizationTypeLabels[registration.organizationType] ??
+    registration.organizationType
+  );
 }
 
 function formatDate(value?: string) {
@@ -63,14 +75,39 @@ function maskPhone(phone: string) {
   return `${normalized.slice(0, 3)}****${normalized.slice(-4)}`;
 }
 
+export function isValidWecomWebhook(value: string | undefined) {
+  const webhook = value?.trim();
+
+  if (!webhook) {
+    return false;
+  }
+
+  try {
+    const url = new URL(webhook);
+    return (
+      url.protocol === "https:" &&
+      url.hostname === wecomWebhookHost &&
+      url.pathname === wecomWebhookPath &&
+      !url.username &&
+      !url.password &&
+      Boolean(url.searchParams.get("key"))
+    );
+  } catch {
+    return false;
+  }
+}
+
 function canSendWecomNotify(meeting: OutreachMeeting) {
-  return Boolean(meeting.enableWecomNotify && meeting.wecomWebhook?.trim());
+  return Boolean(
+    meeting.enableWecomNotify && isValidWecomWebhook(meeting.wecomWebhook),
+  );
 }
 
 function registrationTemplate(
   meeting: OutreachMeeting,
   registration: Registration,
   stats?: WecomMeetingStats,
+  organizationTypeLabelMap: Record<string, string> = {},
 ) {
   return `【外联会议报名通知】
 
@@ -79,7 +116,7 @@ function registrationTemplate(
 会议地点：${meeting.location}
 
 报名人：${registration.name}
-单位类型：${organizationLabel(registration)}
+单位类型：${organizationLabel(registration, organizationTypeLabelMap)}
 单位名称：${registration.organizationName}
 职位：${registration.position ?? "-"}
 手机号：${maskPhone(registration.phone)}
@@ -96,6 +133,7 @@ function walkInTemplate(
   meeting: OutreachMeeting,
   registration: Registration,
   stats?: WecomMeetingStats,
+  organizationTypeLabelMap: Record<string, string> = {},
 ) {
   return `【现场补报名并签到通知】
 
@@ -104,7 +142,7 @@ function walkInTemplate(
 会议地点：${meeting.location}
 
 参会人：${registration.name}
-单位类型：${organizationLabel(registration)}
+单位类型：${organizationLabel(registration, organizationTypeLabelMap)}
 单位名称：${registration.organizationName}
 职位：${registration.position ?? "-"}
 手机号：${maskPhone(registration.phone)}
@@ -147,6 +185,10 @@ function checkinSummaryTemplate(
 }
 
 async function sendTextMessage(webhook: string, content: string): Promise<NotifyResult> {
+  if (!isValidWecomWebhook(webhook)) {
+    return { ok: false, error: "企业微信 Webhook 地址无效" };
+  }
+
   try {
     const response = await fetch(webhook, {
       method: "POST",
@@ -159,6 +201,8 @@ async function sendTextMessage(webhook: string, content: string): Promise<Notify
           content,
         },
       }),
+      redirect: "error",
+      signal: AbortSignal.timeout(wecomRequestTimeoutMs),
     });
 
     const responseBody = (await response.json().catch(() => null)) as
@@ -172,7 +216,14 @@ async function sendTextMessage(webhook: string, content: string): Promise<Notify
       };
     }
 
-    if (responseBody?.errcode && responseBody.errcode !== 0) {
+    if (!responseBody || typeof responseBody.errcode !== "number") {
+      return {
+        ok: false,
+        error: "企业微信返回了无法识别的响应",
+      };
+    }
+
+    if (responseBody.errcode !== 0) {
       return {
         ok: false,
         error: responseBody.errmsg ?? `企业微信返回错误码 ${responseBody.errcode}`,
@@ -197,9 +248,15 @@ export async function notifyWecomRegistration(
     return { ok: false, skipped: true as const, error: "未配置企业微信通知" };
   }
 
+  const organizationTypeLabelMap = await readSettingsLabelMap("organizationType");
   return sendTextMessage(
     meeting.wecomWebhook ?? "",
-    registrationTemplate(meeting, registration, stats),
+    registrationTemplate(
+      meeting,
+      registration,
+      stats,
+      organizationTypeLabelMap,
+    ),
   );
 }
 
@@ -212,9 +269,10 @@ export async function notifyWecomWalkInCheckin(
     return { ok: false, skipped: true as const, error: "未配置企业微信通知" };
   }
 
+  const organizationTypeLabelMap = await readSettingsLabelMap("organizationType");
   return sendTextMessage(
     meeting.wecomWebhook ?? "",
-    walkInTemplate(meeting, registration, stats),
+    walkInTemplate(meeting, registration, stats, organizationTypeLabelMap),
   );
 }
 

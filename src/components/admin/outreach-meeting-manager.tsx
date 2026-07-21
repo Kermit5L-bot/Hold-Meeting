@@ -9,6 +9,7 @@ import { CsvImportDialog } from "@/components/admin/csv-import-dialog";
 import { PrimaryButton } from "@/components/admin/primary-button";
 import { DataTableShell } from "@/components/ui/data-table-shell";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { requestJson } from "@/lib/client-json-request";
 import {
   locationTypeLabels,
   locationTypeOptions,
@@ -20,8 +21,9 @@ import type {
   MeetingStatus,
   OutreachMeeting,
 } from "@/lib/types";
+import type { PublicAdminUser } from "@/lib/admin-users";
 import type { SelectOption } from "@/lib/settings-options";
-import { dateFormatter } from "@/lib/utils";
+import { dateFormatter, getAppYear } from "@/lib/utils";
 
 interface Filters {
   year: string;
@@ -29,7 +31,7 @@ interface Filters {
   region: string;
 }
 
-const currentYear = String(new Date().getFullYear());
+const currentYear = getAppYear(new Date());
 
 const emptyFilters: Filters = {
   year: currentYear,
@@ -87,7 +89,7 @@ function buildForm(meeting: OutreachMeeting): MeetingFormValues {
 
 function getAvailableYears(meetings: OutreachMeeting[]) {
   const years = new Set(
-    meetings.map((meeting) => new Date(meeting.startTime).getFullYear().toString()),
+    meetings.map((meeting) => getAppYear(meeting.startTime)).filter(Boolean),
   );
   years.add(currentYear);
   return Array.from(years).sort((a, b) => Number(b) - Number(a));
@@ -125,22 +127,23 @@ function CoverUploadField({
     const formData = new FormData();
     formData.append("file", file);
 
-    const response = await fetch("/api/uploads/outreach-cover", {
+    const result = await requestJson<{ url?: string; message?: string }>(
+      "/api/uploads/outreach-cover",
+      {
       method: "POST",
       body: formData,
-    });
-    const data = (await response.json().catch(() => null)) as
-      | { url?: string; message?: string }
-      | null;
+      },
+      "上传失败，请更换图片后重试。",
+    );
 
     setUploading(false);
 
-    if (!response.ok || !data?.url) {
-      setError(data?.message ?? "上传失败，请更换图片后重试。");
+    if (!result.ok || !result.data?.url) {
+      setError(result.ok ? "上传失败，请更换图片后重试。" : result.message);
       return;
     }
 
-    onChange(data.url);
+    onChange(result.data.url);
   }
 
   return (
@@ -169,7 +172,7 @@ function CoverUploadField({
         </div>
       ) : value ? (
         <div className="flex h-32 items-center justify-center rounded-md border border-dashed border-amber-300 bg-amber-50 px-4 text-center text-sm text-amber-800">
-          头图已上传，但当前地址暂时无法预览。请确认服务器已开放 public/uploads 目录。
+          头图已上传，但当前地址暂时无法预览。请重试或联系运维检查图片读取服务。
         </div>
       ) : (
         <div className="flex h-32 items-center justify-center rounded-md border border-dashed border-slate-300 bg-gradient-to-r from-blue-50 via-slate-50 to-emerald-50 text-sm text-muted">
@@ -207,7 +210,11 @@ function CoverUploadField({
         ) : null}
       </div>
 
-      {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      {error ? (
+        <p className="text-sm text-red-700" role="alert">
+          {error}
+        </p>
+      ) : null}
     </section>
   );
 }
@@ -221,6 +228,7 @@ function OutreachFormDialog({
   onClose,
   onSubmit,
   error,
+  submitting,
 }: {
   mode: "create" | "edit";
   values: MeetingFormValues;
@@ -230,6 +238,7 @@ function OutreachFormDialog({
   onClose: () => void;
   onSubmit: () => void;
   error: string;
+  submitting: boolean;
 }) {
   const title = mode === "create" ? "新增外联会议" : "编辑外联会议";
 
@@ -266,6 +275,7 @@ function OutreachFormDialog({
           <button
             aria-label="关闭外联会议表单"
             className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-ink"
+            disabled={submitting}
             onClick={onClose}
             type="button"
           >
@@ -515,7 +525,10 @@ function OutreachFormDialog({
         </div>
 
         {error ? (
-          <p className="mx-5 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p
+            className="mx-5 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+            role="alert"
+          >
             {error}
           </p>
         ) : null}
@@ -523,16 +536,18 @@ function OutreachFormDialog({
         <div className="mt-4 flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
           <button
             className="h-10 rounded-md border border-slate-200 px-4 text-sm font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50"
+            disabled={submitting}
             onClick={onClose}
             type="button"
           >
             取消
           </button>
           <button
-            className="h-10 rounded-md bg-brand px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-blue-700"
+            className="h-10 rounded-md bg-brand px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+            disabled={submitting}
             type="submit"
           >
-            保存
+            {submitting ? "保存中…" : "保存"}
           </button>
         </div>
       </form>
@@ -544,10 +559,16 @@ export function OutreachMeetingManager({
   initialMeetings,
   departmentOptions,
   regionOptions,
+  accountId,
+  accountOptions,
+  showAccountColumn,
 }: {
   initialMeetings: OutreachMeeting[];
   departmentOptions: SelectOption[];
   regionOptions: SelectOption[];
+  accountId: string;
+  accountOptions: PublicAdminUser[];
+  showAccountColumn: boolean;
 }) {
   const router = useRouter();
   const [meetings, setMeetings] = useState(initialMeetings);
@@ -557,6 +578,11 @@ export function OutreachMeetingManager({
   const [formValues, setFormValues] = useState(emptyForm);
   const [error, setError] = useState("");
   const [pendingDelete, setPendingDelete] = useState<OutreachMeeting | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [createOwnerUserId, setCreateOwnerUserId] = useState("");
+  const ownerLabels = useMemo(() => new Map(accountOptions.map((item) => [item.id, item.displayName])), [accountOptions]);
+  const scopeQuery = `?accountId=${encodeURIComponent(accountId)}`;
 
   useEffect(() => {
     setMeetings(initialMeetings);
@@ -566,7 +592,7 @@ export function OutreachMeetingManager({
   const filteredMeetings = useMemo(
     () =>
       meetings.filter((meeting) => {
-        const year = new Date(meeting.startTime).getFullYear().toString();
+        const year = getAppYear(meeting.startTime);
         return (
           year === filters.year &&
           (!filters.businessUnit.trim() ||
@@ -593,26 +619,32 @@ export function OutreachMeetingManager({
   }
 
   async function saveMeeting() {
+    if (saving) return;
     setError("");
-    const url =
+    setSaving(true);
+    if (formMode === "create" && accountId === "all" && !createOwnerUserId) { setError("请选择数据归属账号。"); setSaving(false); return; }
+    const baseUrl =
       formMode === "edit" && editingId
         ? `/api/outreach-meetings/${editingId}`
         : "/api/outreach-meetings";
-    const response = await fetch(url, {
-      method: formMode === "edit" ? "PUT" : "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(formValues),
-    });
-    const data = (await response.json().catch(() => null)) as
-      | { message?: string; meeting?: OutreachMeeting }
-      | null;
+    const url = `${baseUrl}${scopeQuery}`;
+    const result = await requestJson<{ meeting?: OutreachMeeting }>(
+      url,
+      {
+        method: formMode === "edit" ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...formValues, ownerUserId: createOwnerUserId || undefined }),
+      },
+      "保存失败，请检查后重试。",
+    );
+    setSaving(false);
 
-    if (!response.ok || !data?.meeting) {
-      setError(data?.message ?? "保存失败，请检查后重试。");
+    if (!result.ok || !result.data?.meeting) {
+      setError(result.ok ? "保存失败，请检查后重试。" : result.message);
       return;
     }
 
-    const savedMeeting = data.meeting;
+    const savedMeeting = result.data.meeting;
     setMeetings((current) =>
       formMode === "edit"
         ? current.map((meeting) =>
@@ -626,13 +658,18 @@ export function OutreachMeetingManager({
   }
 
   async function deleteMeeting(meeting: OutreachMeeting) {
-    const response = await fetch(`/api/outreach-meetings/${meeting.id}`, {
-      method: "DELETE",
-    });
+    if (deleting) return;
+    setError("");
+    setDeleting(true);
+    const result = await requestJson<{ ok?: boolean }>(
+      `/api/outreach-meetings/${meeting.id}${scopeQuery}`,
+      { method: "DELETE" },
+      "删除失败，请刷新后重试。",
+    );
+    setDeleting(false);
 
-    if (!response.ok) {
-      setError("删除失败，请刷新后重试。");
-      setPendingDelete(null);
+    if (!result.ok) {
+      setError(result.message);
       return;
     }
 
@@ -655,16 +692,20 @@ export function OutreachMeetingManager({
         </div>
         <div className="flex flex-wrap gap-2">
           <CsvImportDialog
+            accountId={accountId}
+            ownerOptions={accountOptions}
             confirmUrl="/api/import/outreach-meetings/confirm"
-            description="先导入外联会议主表。历史导入编号会用于后续报名签到明细匹配会议。"
+            description="完整保留模板表头并删除示例行后填写，时间使用 YYYY-MM-DD HH:mm。历史导入编号须唯一。"
             previewUrl="/api/import/outreach-meetings/preview"
             templateHref="/admin/import-templates/outreach-meetings"
             title="导入外联会议主表"
             triggerLabel="导入会议"
           />
           <CsvImportDialog
+            accountId={accountId}
+            ownerOptions={accountOptions}
             confirmUrl="/api/import/outreach-registrations/confirm"
-            description="导入报名和签到明细前，请先导入对应外联会议主表，并确保会议历史导入编号一致。"
+            description="完整保留模板表头并删除示例行。会议编号可填写列表中的系统编号，也兼容旧模板的会议历史导入编号。"
             previewUrl="/api/import/outreach-registrations/preview"
             templateHref="/admin/import-templates/outreach-registrations"
             title="导入报名签到明细"
@@ -676,8 +717,12 @@ export function OutreachMeetingManager({
           </PrimaryButton>
         </div>
       </div>
+      {accountId === "all" ? <label className="grid max-w-md gap-1 text-sm font-medium">数据归属账号<select autoComplete="off" className="h-10 rounded-md border border-slate-300 bg-white px-3" name="createOwnerUserId" onChange={(event) => setCreateOwnerUserId(event.target.value)} required value={createOwnerUserId}><option value="">请选择</option>{accountOptions.filter((item) => item.status !== "deleted").map((item) => <option key={item.id} value={item.id}>{item.displayName}（{item.username}）</option>)}</select></label> : null}
 
-      <form className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-panel md:grid-cols-4">
+      <form
+        className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-panel md:grid-cols-4"
+        onSubmit={(event) => event.preventDefault()}
+      >
         <label className="grid gap-1 text-sm font-medium text-ink">
           年度
           <select
@@ -754,14 +799,23 @@ export function OutreachMeetingManager({
               <th className="px-5 py-3">头图</th>
               <th className="px-5 py-3">企业微信通知</th>
               <th className="px-5 py-3">状态</th>
+              {showAccountColumn ? <th className="px-5 py-3">数据账号</th> : null}
               <th className="px-5 py-3">操作</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {filteredMeetings.map((meeting) => (
               <tr key={meeting.id}>
-                <td className="max-w-64 px-5 py-4 font-medium text-ink">
-                  {meeting.title}
+                <td className="max-w-64 px-5 py-4 text-ink">
+                  <p className="font-medium">{meeting.title}</p>
+                  <p className="mt-1 break-all font-mono text-xs font-normal text-slate-500">
+                    编号：{meeting.id}
+                  </p>
+                  {meeting.importKey ? (
+                    <p className="mt-1 break-all text-xs font-normal text-slate-500">
+                      历史编号：{meeting.importKey}
+                    </p>
+                  ) : null}
                 </td>
                 <td className="px-5 py-4 text-slate-600">
                   {dateFormatter.format(new Date(meeting.startTime))}
@@ -792,11 +846,12 @@ export function OutreachMeetingManager({
                 <td className="px-5 py-4">
                   <StatusBadge status={meeting.status} />
                 </td>
+                {showAccountColumn ? <td className="px-5 py-4 text-slate-600">{ownerLabels.get(meeting.ownerUserId) ?? "已删除账号"}</td> : null}
                 <td className="px-5 py-4">
                   <div className="flex gap-2">
                     <Link
                       className="inline-flex h-9 items-center gap-2 rounded-md border border-brand/30 px-3 text-sm font-medium text-brand transition-colors duration-150 hover:bg-brand/5"
-                      href={`/admin/outreach-meetings/${meeting.id}`}
+                      href={`/admin/outreach-meetings/${meeting.id}${scopeQuery}`}
                     >
                       <Users aria-hidden="true" className="h-4 w-4" />
                       报名签到
@@ -811,7 +866,10 @@ export function OutreachMeetingManager({
                     </button>
                     <button
                       className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 px-3 text-sm font-medium text-red-700 transition-colors duration-150 hover:bg-red-50"
-                      onClick={() => setPendingDelete(meeting)}
+                      onClick={() => {
+                        setError("");
+                        setPendingDelete(meeting);
+                      }}
                       type="button"
                     >
                       <Trash2 aria-hidden="true" className="h-4 w-4" />
@@ -823,7 +881,7 @@ export function OutreachMeetingManager({
             ))}
             {filteredMeetings.length === 0 ? (
               <tr>
-                <td className="px-5 py-10 text-center text-sm text-muted" colSpan={10}>
+                <td className="px-5 py-10 text-center text-sm text-muted" colSpan={showAccountColumn ? 11 : 10}>
                   暂无符合条件的外联会议。可以重置筛选或新增会议。
                 </td>
               </tr>
@@ -841,6 +899,7 @@ export function OutreachMeetingManager({
           onClose={() => setFormMode(null)}
           onSubmit={saveMeeting}
           regionOptions={regionOptions}
+          submitting={saving}
           values={formValues}
         />
       ) : null}
@@ -857,22 +916,32 @@ export function OutreachMeetingManager({
               删除外联会议
             </h2>
             <p className="mt-2 text-sm leading-6 text-muted">
-              确认删除“{pendingDelete.title}”？报名和签到数据不会自动删除。
+              确认删除“{pendingDelete.title}”？已有报名或签到数据的会议不能删除，可改为已归档。
             </p>
+            {error ? (
+              <p
+                className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+                role="alert"
+              >
+                {error}
+              </p>
+            ) : null}
             <div className="mt-5 flex justify-end gap-2">
               <button
                 className="h-10 rounded-md border border-slate-200 px-4 text-sm font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-50"
+                disabled={deleting}
                 onClick={() => setPendingDelete(null)}
                 type="button"
               >
                 取消
               </button>
               <button
-                className="h-10 rounded-md bg-red-600 px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-red-700"
+                className="h-10 rounded-md bg-red-600 px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                disabled={deleting}
                 onClick={() => deleteMeeting(pendingDelete)}
                 type="button"
               >
-                确认删除
+                {deleting ? "删除中..." : "确认删除"}
               </button>
             </div>
           </section>

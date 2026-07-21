@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Send } from "lucide-react";
 import { MobileInput, MobileTextarea } from "@/components/ui/mobile-field";
 import { normalizePhoneDigits, phoneLengthMessage } from "@/lib/phone";
-import { organizationTypeOptions } from "@/lib/registration-options";
+import type { SelectOption } from "@/lib/settings-options";
 import type { RegistrationFormValues } from "@/lib/types";
 
 const initialValues: Omit<RegistrationFormValues, "meetingId"> = {
@@ -19,17 +19,13 @@ const initialValues: Omit<RegistrationFormValues, "meetingId"> = {
   notes: "",
 };
 
-function maskPhone(phone: string) {
-  const normalized = normalizePhoneDigits(phone);
-
-  if (normalized.length < 7) {
-    return normalized;
-  }
-
-  return `${normalized.slice(0, 3)}****${normalized.slice(-4)}`;
-}
-
-export function RegistrationForm({ meetingId }: { meetingId: string }) {
+export function RegistrationForm({
+  meetingId,
+  organizationTypeOptions: settingOrganizationTypeOptions,
+}: {
+  meetingId: string;
+  organizationTypeOptions: SelectOption[];
+}) {
   const router = useRouter();
   const [values, setValues] = useState(initialValues);
   const [error, setError] = useState("");
@@ -57,40 +53,42 @@ export function RegistrationForm({ meetingId }: { meetingId: string }) {
     }
 
     setSubmitting(true);
-
-    const response = await fetch("/api/registrations", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        meetingId,
-        ...values,
-      }),
-    });
-
-    if (response.status === 409) {
-      setError("您已提交过报名信息");
-      setSubmitting(false);
-      return;
-    }
-
-    if (!response.ok) {
+    try {
+      const response = await fetch("/api/registrations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          meetingId,
+          ...values,
+        }),
+      });
       const data = (await response.json().catch(() => null)) as
-        | { message?: string }
+        | { message?: string; successToken?: string }
         | null;
-      setError(data?.message ?? "报名提交失败，请检查后重试。");
-      setSubmitting(false);
-      return;
-    }
 
-    router.push(
-      `/m/success?type=registration&name=${encodeURIComponent(
-        values.name,
-      )}&phone=${encodeURIComponent(maskPhone(values.phone))}&meetingId=${encodeURIComponent(
-        meetingId,
-      )}`,
-    );
+      if (response.status === 409) {
+        setError(data?.message ?? "您已提交过报名信息");
+        return;
+      }
+
+      if (!response.ok) {
+        setError(data?.message ?? "报名提交失败，请检查后重试。");
+        return;
+      }
+
+      if (!data?.successToken) {
+        setError("报名已保存，但确认页面暂时不可用，请联系现场工作人员。");
+        return;
+      }
+
+      router.push(`/m/success?token=${encodeURIComponent(data.successToken)}`);
+    } catch {
+      setError("网络连接失败，请检查网络后重试。");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -120,7 +118,7 @@ export function RegistrationForm({ meetingId }: { meetingId: string }) {
           value={values.organizationType}
         >
           <option value="">请选择单位类型</option>
-          {organizationTypeOptions.map((option) => (
+          {settingOrganizationTypeOptions.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
             </option>
@@ -207,7 +205,10 @@ export function RegistrationForm({ meetingId }: { meetingId: string }) {
         value={values.notes}
       />
       {error ? (
-        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p
+          className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+          role="alert"
+        >
           {error}
         </p>
       ) : null}
@@ -217,7 +218,7 @@ export function RegistrationForm({ meetingId }: { meetingId: string }) {
         type="submit"
       >
         <Send aria-hidden="true" className="h-4 w-4" />
-        {submitting ? "提交中" : "提交报名"}
+        {submitting ? "提交中…" : "提交报名"}
       </button>
     </form>
   );

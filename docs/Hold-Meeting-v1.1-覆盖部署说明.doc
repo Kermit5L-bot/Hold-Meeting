@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Hold Meeting v1.1 覆盖部署说明</title>
+  <style>
+    body { font-family: "Microsoft YaHei", Arial, sans-serif; line-height: 1.65; color: #1f2933; }
+    h1 { font-size: 26px; color: #17365d; }
+    h2 { font-size: 18px; color: #1f4e79; border-bottom: 1px solid #d9e2ec; padding-bottom: 4px; margin-top: 24px; }
+    p { margin: 8px 0; }
+    ul { margin-top: 6px; }
+    code, pre { font-family: Consolas, "Courier New", monospace; }
+    pre { background: #f4f6f8; border: 1px solid #d9e2ec; padding: 10px 12px; white-space: pre-wrap; }
+    .meta { color: #52616b; }
+    .warning { color: #8a3b12; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Hold Meeting v1.1 覆盖部署说明</h1>
+  <p class="meta">适用项目：市场部会议信息收集管理系统</p>
+  <p class="meta">仓库：https://github.com/Kermit5L-bot/Hold-Meeting</p>
+  <p class="meta">目标版本：v1.1.0</p>
+  <p class="meta">部署目标：在公司服务器上用 v1.1 覆盖当前 v1.0 程序，同时保留生产数据和上传文件。</p>
+
+  <h2>1. 升级前必须备份</h2>
+  <p class="warning">升级前必须先备份数据目录、上传目录和生产环境变量。不要只备份代码。</p>
+  <p>需要备份：</p>
+  <pre>data/
+public/uploads/
+.env.production 或当前生产环境变量配置文件</pre>
+  <p>重点数据文件：</p>
+  <pre>data/registrations.sqlite
+data/registrations.sqlite-wal
+data/registrations.sqlite-shm
+data/admin-users.json
+data/settings.json
+data/outreach-meetings.json
+data/marketing-meetings.json
+data/external-forums.json
+data/wecom-checkin-summary-state.json
+public/uploads/</pre>
+
+  <h2>2. 停止 v1.0 服务</h2>
+  <p>如果使用 PM2：</p>
+  <pre>pm2 stop hold-meeting</pre>
+  <p>如果使用 systemd、IIS 或其他进程管理方式，请先停止当前 Node 服务，避免部署时仍有进程写 SQLite。</p>
+
+  <h2>3. 拉取 v1.1 代码</h2>
+  <p>进入现有项目目录：</p>
+  <pre>cd /path/to/Hold-Meeting</pre>
+  <p>确认当前无未保存的服务器本地改动：</p>
+  <pre>git status</pre>
+  <p>如果服务器代码没有本地修改，执行：</p>
+  <pre>git fetch origin --tags
+git checkout main
+git pull origin main
+git checkout v1.1.0</pre>
+  <p>如果服务器之前不是 Git 部署，而是手工拷贝部署，建议新建干净目录：</p>
+  <pre>git clone https://github.com/Kermit5L-bot/Hold-Meeting.git Hold-Meeting-v1.1
+cd Hold-Meeting-v1.1
+git checkout v1.1.0</pre>
+  <p>然后把旧版本的 <code>data/</code>、<code>public/uploads/</code>、生产环境变量配置迁移过来。</p>
+
+  <h2>4. 确认 Node 版本</h2>
+  <p>v1.1 要求 Node.js 24 或以上：</p>
+  <pre>node -v
+npm -v</pre>
+  <p class="warning">如果 Node 低于 24，不建议继续部署。当前程序使用 node:sqlite，旧 Node 版本可能直接启动失败。</p>
+
+  <h2>5. 安装依赖与构建</h2>
+  <pre>npm ci
+npm run build</pre>
+  <p>构建成功后再启动。不要跳过 <code>npm ci</code>，因为 v1.1 已更新依赖锁文件和 ESLint 配置。</p>
+
+  <h2>6. 生产环境变量</h2>
+  <p>确认生产环境变量至少包含：</p>
+  <pre>ADMIN_SESSION_SECRET=至少32位随机字符串
+ADMIN_INITIAL_PASSWORD=首次部署临时管理员密码
+APP_BASE_URL=https://正式访问域名
+REGISTRATIONS_DB_PATH=data/registrations.sqlite
+NODE_ENV=production</pre>
+  <ul>
+    <li><code>ADMIN_SESSION_SECRET</code> 必须保留原生产值，不要随便改。改了会导致已有登录态失效，但不是数据丢失。</li>
+    <li><code>ADMIN_INITIAL_PASSWORD</code> 只在没有管理员时生效，已有 <code>data/admin-users.json</code> 后不会重置密码。</li>
+    <li><code>APP_BASE_URL</code> 建议配置为正式域名，否则报名/签到链接可能生成不准确。</li>
+    <li><code>REGISTRATIONS_DB_PATH</code> 如果生产使用数据盘路径，继续沿用原路径，不要改回默认值。</li>
+  </ul>
+
+  <h2>7. 启动 v1.1</h2>
+  <p>如果使用 PM2，仍然只能单实例：</p>
+  <pre>pm2 start npm --name hold-meeting -- start -- -p 3000
+pm2 save</pre>
+  <p>如果已有 PM2 应用：</p>
+  <pre>pm2 restart hold-meeting</pre>
+  <p class="warning">不要使用 PM2 cluster、不要启动多个 Node 进程、不要多台服务器同时写同一个 SQLite 文件。</p>
+  <p>原因：当前报名/签到主存储是 SQLite，适合单机单进程部署。多进程可能造成数据库锁竞争或企业微信汇总通知重复发送。</p>
+
+  <h2>8. 反向代理检查</h2>
+  <p>Nginx / IIS / 网关反代到 Node 服务端口，例如 3000。</p>
+  <p>需要保留请求头：</p>
+  <pre>Host
+X-Forwarded-Proto
+X-Forwarded-For</pre>
+  <p>建议启用 HTTPS。否则后台生成报名/签到链接时可能出现协议或域名不正确。</p>
+
+  <h2>9. v1.1 新增注意事项</h2>
+  <p>v1.1 增加企业微信签到进度汇总相关能力。</p>
+  <p>新增运行态文件：</p>
+  <pre>data/wecom-checkin-summary-state.json</pre>
+  <p>这个文件用于记录企业微信签到汇总发送状态，应纳入备份，不要提交 Git。</p>
+  <p>风险点：</p>
+  <ul>
+    <li>如果多进程部署，可能重复发送企业微信汇总消息。</li>
+    <li>如果 <code>data/</code> 没有写权限，报名、签到、汇总状态都会异常。</li>
+    <li>如果服务器重启后没有恢复 Node 服务，定时汇总不会运行。</li>
+  </ul>
+
+  <h2>10. 上线后验证</h2>
+  <p>启动后检查：</p>
+  <pre>curl -I https://正式域名/login</pre>
+  <p>人工验证：</p>
+  <ul>
+    <li>打开 <code>/login</code>。</li>
+    <li>登录后台。</li>
+    <li>创建或查看外联会议。</li>
+    <li>生成报名链接。</li>
+    <li>手机端打开报名页。</li>
+    <li>提交一条测试报名。</li>
+    <li>后台确认报名数据可见。</li>
+    <li>测试签到流程。</li>
+    <li>如启用企业微信通知，确认报名/签到通知正常。</li>
+    <li>上传会议头图，确认图片能正常显示。</li>
+  </ul>
+  <p>验证无误后，删除测试会议或测试报名数据，避免污染正式数据。</p>
+
+  <h2>11. 容易出问题的点</h2>
+  <ul>
+    <li>覆盖代码时误删 <code>data/</code>：会导致会议、报名、管理员数据丢失。</li>
+    <li>覆盖代码时误删 <code>public/uploads/</code>：会导致会议头图丢失。</li>
+    <li>Node 版本低于 24：可能启动失败。</li>
+    <li>忘记配置 <code>ADMIN_SESSION_SECRET</code>：生产安全风险。</li>
+    <li>改动 <code>REGISTRATIONS_DB_PATH</code>：可能导致系统看不到旧报名数据。</li>
+    <li>使用 PM2 cluster：可能引发 SQLite 锁竞争和企业微信汇总重复发送。</li>
+    <li>未配置 <code>APP_BASE_URL</code> 或反代请求头：可能导致二维码/链接域名不对。</li>
+    <li>没有备份 SQLite 的 <code>-wal</code>、<code>-shm</code> 文件：热备份时可能不完整。停服后备份最稳。</li>
+  </ul>
+
+  <h2>12. 回滚方案</h2>
+  <p>如果 v1.1 部署后异常：</p>
+  <pre>pm2 stop hold-meeting
+git checkout v1.0.0
+npm ci
+npm run build
+pm2 restart hold-meeting</pre>
+  <p>如果数据也发生异常，恢复升级前备份的：</p>
+  <pre>data/
+public/uploads/</pre>
+  <p class="warning">更稳妥的回滚方式是保留 v1.0 目录和 v1.1 目录，通过反向代理切换。但无论哪种方式，都不要让两个版本同时写同一个 SQLite 数据库。</p>
+</body>
+</html>

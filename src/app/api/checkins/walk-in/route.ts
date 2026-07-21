@@ -1,102 +1,41 @@
 import { NextResponse } from "next/server";
 import { findOutreachMeeting } from "@/lib/outreach-meetings-store";
-import { isValidPhoneLength, phoneLengthMessage } from "@/lib/phone";
-import {
-  createWalkInRegistrationAndCheckin,
-  findRegistrationById,
-  listRegistrationsByMeeting,
-  updateRegistrationWecomNotifyStatus,
-} from "@/lib/registrations-store";
-import type { RegistrationFormValues } from "@/lib/types";
-import {
-  buildWecomMeetingStats,
-  notifyWecomWalkInCheckin,
-  type WecomMeetingStats,
-} from "@/lib/wecom-notifier";
-
-function validateRegistration(values: RegistrationFormValues) {
-  if (!values.meetingId.trim()) {
-    return "缺少会议信息，请重新打开签到链接。";
-  }
-
-  if (!values.name.trim()) {
-    return "请填写姓名。";
-  }
-
-  if (!values.organizationType) {
-    return "请选择单位类型。";
-  }
-
-  if (values.organizationType === "other" && !values.otherOrganizationType.trim()) {
-    return "请选择或填写其他单位类型。";
-  }
-
-  if (!values.organizationName.trim()) {
-    return "请填写单位名称。";
-  }
-
-  if (!isValidPhoneLength(values.phone)) {
-    return phoneLengthMessage();
-  }
-
-  if (!values.meal) {
-    return "请选择是否用餐。";
-  }
-
-  return null;
-}
-
-async function sendWecomNotifyIfNeeded(registrationId: string, meetingId: string) {
-  const [meeting, registration] = await Promise.all([
-    findOutreachMeeting(meetingId),
-    findRegistrationById(registrationId),
-  ]);
-
-  if (!meeting || !registration) {
-    return;
-  }
-
-  let stats: WecomMeetingStats | undefined;
-
-  try {
-    stats = buildWecomMeetingStats(await listRegistrationsByMeeting(meetingId));
-  } catch (error) {
-    console.error("读取企业微信签到统计失败", {
-      meetingId,
-      registrationId,
-      error,
-    });
-  }
-
-  const result = await notifyWecomWalkInCheckin(meeting, registration, stats);
-
-  if ("skipped" in result && result.skipped) {
-    return;
-  }
-
-  if (result.ok) {
-    await updateRegistrationWecomNotifyStatus(registrationId, "success");
-    return;
-  }
-
-  console.error("企业微信现场补报名通知发送失败", {
-    meetingId,
-    registrationId,
-    error: result.error,
-  });
-  await updateRegistrationWecomNotifyStatus(
-    registrationId,
-    "failed",
-    result.error ?? "企业微信现场补报名通知发送失败",
-  );
-}
+import { getOutreachAccessIssue } from "@/lib/outreach-meeting-access";
+import { publicApiRateLimitResponse } from "@/lib/public-api-rate-limit";
+import { parseRegistrationFormValues } from "@/lib/registration-request";
+import { createWalkInRegistrationAndCheckin } from "@/lib/registrations-store";
+import { readActiveSettingsOptions } from "@/lib/settings-options";
+import { wakeWecomNotificationJob } from "@/lib/wecom-notification-job";
+import { createPublicSuccessToken } from "@/lib/auth-session";
 
 export async function POST(request: Request) {
-  const values = (await request.json()) as RegistrationFormValues;
-  const validationMessage = validateRegistration(values);
+  const rateLimited = publicApiRateLimitResponse(
+    request,
+    "registration-write",
+    600,
+    10 * 60 * 1000,
+  );
+  if (rateLimited) return rateLimited;
 
-  if (validationMessage) {
-    return NextResponse.json({ message: validationMessage }, { status: 400 });
+  const organizationTypeOptions = await readActiveSettingsOptions("organizationType");
+  const parsed = parseRegistrationFormValues(
+    await request.json().catch(() => null),
+    new Set(organizationTypeOptions.map((option) => option.value)),
+  );
+
+  if (!parsed.values) {
+    return NextResponse.json({ message: parsed.error }, { status: 400 });
+  }
+
+  const values = parsed.values;
+  const meeting = await findOutreachMeeting(values.meetingId);
+  const accessIssue = getOutreachAccessIssue(meeting, "checkin");
+
+  if (accessIssue) {
+    return NextResponse.json(
+      { message: accessIssue.message },
+      { status: accessIssue.status },
+    );
   }
 
   const result = await createWalkInRegistrationAndCheckin(values);
@@ -105,20 +44,25 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         message: "您已提交过报名信息，请返回后直接签到。",
-        registrationId: result.registration.id,
       },
       { status: 409 },
     );
   }
 
-  void sendWecomNotifyIfNeeded(result.registration.id, values.meetingId).catch((error) => {
-    console.error("企业微信现场补报名通知后台任务失败", error);
+  void wakeWecomNotificationJob().catch((error) => {
+    console.error("唤醒企业微信现场补报名通知任务失败", error);
+  });
+
+  const successToken = await createPublicSuccessToken({
+    registrationId: result.registration.id,
+    meetingId: result.registration.meetingId,
+    type: "walk_in_checkin",
   });
 
   return NextResponse.json({
-    registrationId: result.registration.id,
     name: result.registration.name,
     phone: result.registration.phone,
     checkinAt: result.registration.checkinAt,
+    successToken,
   });
 }
