@@ -32,5 +32,6 @@ export async function POST(request: Request) {
   const meeting = await createOutreachMeeting(parsed.values, ownerUserId);
   revalidatePath("/admin");
   revalidatePath("/admin/outreach-meetings");
+  revalidatePath(`/m/register/${meeting.id}`);
   return NextResponse.json({ meeting });
 }

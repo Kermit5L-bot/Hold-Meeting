@@ -65,11 +65,18 @@ export function RegistrationForm({
         }),
       });
       const data = (await response.json().catch(() => null)) as
-        | { message?: string; successToken?: string }
+        | {
+            code?: string;
+            message?: string;
+            successToken?: string;
+          }
         | null;
 
       if (response.status === 409) {
         setError(data?.message ?? "您已提交过报名信息");
+        if (data?.code === "registration_deadline_passed") {
+          router.refresh();
+        }
         return;
       }
 

@@ -35,6 +35,7 @@ export interface MeetingBase {
 
 export interface OutreachMeeting extends MeetingBase {
   type: "outreach";
+  registrationDeadline?: string;
   registrationEnabled: boolean;
   checkinEnabled: boolean;
   mealEnabled: boolean;
@@ -84,6 +85,7 @@ export interface MeetingFormValues {
   type: MeetingType;
   startTime: string;
   endTime: string;
+  registrationDeadline: string;
   locationType: LocationType;
   location: string;
   region: string;

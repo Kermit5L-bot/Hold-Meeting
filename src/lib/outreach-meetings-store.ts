@@ -138,6 +138,9 @@ function formToOutreachMeeting(
     type: "outreach",
     startTime: toStoredDateTime(values.startTime),
     endTime: values.endTime ? toStoredDateTime(values.endTime) : undefined,
+    registrationDeadline: values.registrationDeadline
+      ? toStoredDateTime(values.registrationDeadline)
+      : undefined,
     locationType: values.locationType,
     location: values.location.trim(),
     region: values.region.trim() || undefined,

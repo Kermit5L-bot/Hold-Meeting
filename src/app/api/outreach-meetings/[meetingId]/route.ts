@@ -44,6 +44,7 @@ export async function PUT(
   revalidatePath("/admin");
   revalidatePath("/admin/outreach-meetings");
   revalidatePath(`/admin/outreach-meetings/${meetingId}`);
+  revalidatePath(`/m/register/${meetingId}`);
   return NextResponse.json({ meeting });
 }
 

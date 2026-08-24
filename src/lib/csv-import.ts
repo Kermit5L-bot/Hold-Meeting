@@ -57,6 +57,7 @@ const templates: Record<ImportKind, string[]> = {
     "会议主题",
     "会议开始时间",
     "会议结束时间",
+    "报名截止时间",
     "地点类型",
     "会议地点",
     "所属区域",
@@ -120,6 +121,10 @@ const templates: Record<ImportKind, string[]> = {
   ],
 };
 
+const optionalTemplateHeaders: Partial<Record<ImportKind, readonly string[]>> = {
+  "outreach-meetings": ["报名截止时间"],
+};
+
 const headerAliases: Partial<
   Record<ImportKind, Record<string, readonly string[]>>
 > = {
@@ -134,6 +139,7 @@ const sampleRows: Record<ImportKind, string[]> = {
     "华东区域客户交流会",
     "2025-05-18 09:30",
     "2025-05-18 16:30",
+    "2025-05-17 18:00",
     "线下",
     "上海会议中心",
     "华东",
@@ -552,6 +558,7 @@ function getRows(kind: ImportKind, text: string, errors: ImportIssue[]) {
   }
 
   const expectedHeaders = templates[kind];
+  const optionalHeaders = new Set(optionalTemplateHeaders[kind] ?? []);
   const aliases = headerAliases[kind] ?? {};
   const headers = sourceHeaders.map((header) => {
     const canonicalHeader = expectedHeaders.find((expectedHeader) =>
@@ -563,7 +570,7 @@ function getRows(kind: ImportKind, text: string, errors: ImportIssue[]) {
     (header, index) => header && headers.indexOf(header) !== index,
   );
   const missingHeaders = expectedHeaders.filter(
-    (header) => !headers.includes(header),
+    (header) => !optionalHeaders.has(header) && !headers.includes(header),
   );
 
   if (duplicateHeaders.length > 0) {
@@ -674,6 +681,14 @@ async function buildOutreachMeetings(text: string, ownerUserId: string) {
     const endTime = endTimeValue
       ? parseDateTime(endTimeValue, "会议结束时间", errors)
       : undefined;
+    const registrationDeadlineValue = optional(row, "报名截止时间");
+    const registrationDeadline = registrationDeadlineValue
+      ? parseDateTime(
+          registrationDeadlineValue,
+          "报名截止时间",
+          errors,
+        )
+      : undefined;
     const locationType = parseMapped(required(row, "地点类型", errors), locationTypeMap, "地点类型", errors);
     const location = required(row, "会议地点", errors);
     const status = parseMapped(
@@ -709,6 +724,7 @@ async function buildOutreachMeetings(text: string, ownerUserId: string) {
       type: "outreach",
       startTime,
       endTime,
+      registrationDeadline,
       locationType,
       location,
       region: optional(row, "所属区域") || undefined,

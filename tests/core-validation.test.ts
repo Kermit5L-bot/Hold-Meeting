@@ -12,6 +12,7 @@ const validMeeting = {
   title: "客户交流会",
   startTime: "2026-07-21T09:00",
   endTime: "2026-07-21T12:00",
+  registrationDeadline: "",
   locationType: "offline",
   location: "上海会议中心",
   region: "华东",
@@ -52,6 +53,20 @@ test("会议表单接受应用内上传的安全图片地址", () => {
     parsed.values?.coverImageUrl,
     "/uploads/outreach-covers/cover-123.webp",
   );
+});
+
+test("会议表单校验并保留可选报名截止时间", () => {
+  const valid = parseMeetingFormValues({
+    ...validMeeting,
+    registrationDeadline: "2026-07-20T18:00",
+  });
+  const invalid = parseMeetingFormValues({
+    ...validMeeting,
+    registrationDeadline: "2026-02-30T18:00",
+  });
+
+  assert.equal(valid.values?.registrationDeadline, "2026-07-20T18:00");
+  assert.equal(invalid.values, null);
 });
 
 test("报名表单规范化手机号并清理字段空白", () => {

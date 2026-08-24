@@ -33,7 +33,10 @@ export async function POST(request: Request) {
 
   if (accessIssue) {
     return NextResponse.json(
-      { message: accessIssue.message },
+      {
+        message: accessIssue.message,
+        ...(accessIssue.code ? { code: accessIssue.code } : {}),
+      },
       { status: accessIssue.status },
     );
   }

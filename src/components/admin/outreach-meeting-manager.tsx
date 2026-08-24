@@ -44,6 +44,7 @@ const emptyForm: MeetingFormValues = {
   type: "outreach",
   startTime: "",
   endTime: "",
+  registrationDeadline: "",
   locationType: "offline",
   location: "",
   region: "",
@@ -69,6 +70,7 @@ function buildForm(meeting: OutreachMeeting): MeetingFormValues {
     type: "outreach",
     startTime: toInputDateTime(meeting.startTime),
     endTime: toInputDateTime(meeting.endTime),
+    registrationDeadline: toInputDateTime(meeting.registrationDeadline),
     locationType: meeting.locationType,
     location: meeting.location,
     region: meeting.region ?? "",
@@ -317,6 +319,21 @@ function OutreachFormDialog({
               type="datetime-local"
               value={values.endTime}
             />
+          </label>
+          <label className="grid gap-1.5 text-sm font-medium text-ink md:col-span-2">
+            报名截止时间
+            <input
+              className="h-10 rounded-md border border-slate-200 px-3 text-sm text-ink"
+              name="registrationDeadline"
+              onChange={(event) =>
+                update("registrationDeadline", event.target.value)
+              }
+              type="datetime-local"
+              value={values.registrationDeadline}
+            />
+            <span className="text-xs font-normal leading-5 text-muted">
+              选填；未填写时，以会议开始时间作为报名截止时间。
+            </span>
           </label>
           <label className="grid gap-1.5 text-sm font-medium text-ink">
             会议地点类型

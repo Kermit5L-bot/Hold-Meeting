@@ -102,6 +102,7 @@ export function parseMeetingFormValues(
   const title = stringValue(record, "title");
   const startTime = stringValue(record, "startTime");
   const endTime = stringValue(record, "endTime");
+  const registrationDeadline = stringValue(record, "registrationDeadline");
   const locationType = stringValue(record, "locationType");
   const location = stringValue(record, "location");
   const region = stringValue(record, "region");
@@ -125,6 +126,9 @@ export function parseMeetingFormValues(
   }
   if (endTime && !isValidLocalDateTime(endTime)) {
     return { values: null, error: "请选择有效的会议结束时间。" };
+  }
+  if (registrationDeadline && !isValidLocalDateTime(registrationDeadline)) {
+    return { values: null, error: "请选择有效的报名截止时间。" };
   }
   if (endTime && localDateTimeMs(endTime) < localDateTimeMs(startTime)) {
     return { values: null, error: "会议结束时间不能早于会议开始时间。" };
@@ -181,6 +185,7 @@ export function parseMeetingFormValues(
       type: "outreach",
       startTime,
       endTime,
+      registrationDeadline,
       locationType,
       location,
       region,
